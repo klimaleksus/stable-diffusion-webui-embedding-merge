@@ -1,45 +1,52 @@
 # stable-diffusion-webui-embedding-merge
 
+'''
+WebUI Dependencies:
+    
+1) Class <modules.textual_inversion.textual_inversion.Embedding> is used to create embeddings.
+     required fields: <.vec> = actual tensor, <.vectors> = first dim size, <.shape> = last dim size.
+2) Object <modules.sd_hijack.model_hijack.embedding_db> is abused to create ephemeral embeddings.
+     Work with fields <.word_embeddings> and <.ids_lookup> is replicated from
+     </modules/textual_inversion/textual_inversion.py>, refer to register_embedding() here.
+3) Saving of embedding is done by calling <modules.textual_inversion.textual_inversion.create_embedding(name, num_vectors_per_token, overwrite_old, init_text='*')>
+     and then editing .pt file, plus <modules.sd_hijack.model_hijack.embedding_db.load_textual_inversion_embeddings()>
+     also <modules.sd_hijack.model_hijack.embedding_db.add_embedding_dir(path)> is used.
+4) <modules.sd_hijack.StableDiffusionModelHijack.get_prompt_lengths(text)> is replaced,
+     expecting to return tuple <(token_count, self.clip.get_target_prompt_token_count(token_count))>
+5) <modules.sd_hijack.model_hijack.clip.process_texts(texts)> is called, expecting to return a tuple
+     with second argument equal to token count of provided text.
+6) Code from <https://github.com/AUTOMATIC1111/stable-diffusion-webui-tokenizer> is heavily copied:
+     it grabs <shared.sd_model.cond_stage_model.wrapped> and checks it against
+     <FrozenCLIPEmbedder> and <FrozenOpenCLIPEmbedder>, refer to tokens_to_text() here.
+7) <shared.sd_model.cond_stage_model.tokenize_line(line)> is called many times when parsing prompts.
+     The code is very dependent on what it returns! Source in </modules/sd_hijack_clip.py>
+     Also <shared.sd_model.cond_stage_model.tokenize()> can be called.
+'''
+
 import re
 import os
 import torch
 import json
-import time
 import html
 import traceback
 import threading
 import gradio
-import modules.extras
-import modules.ui
+import modules
+from modules import shared, scripts, script_callbacks, devices
 from modules.shared import opts, cmd_opts
-from modules import shared, scripts, script_callbacks, processing, devices, styles
-from modules.processing import StableDiffusionProcessing
-from webui import wrap_gradio_gpu_call
 from modules.textual_inversion.textual_inversion import Embedding
-
 from ldm.modules.encoders.modules import FrozenCLIPEmbedder, FrozenOpenCLIPEmbedder
 import open_clip.tokenizer
 
-_webui_embedding_merge_extension_ = None
-
-class EmbeddingMergeExtension(scripts.Script):
-    def title(self):
-        return 'Embedding Merge'
-    def show(self,is_img2img):
-        return scripts.AlwaysVisible
-    def process(self,p):
-        if _webui_embedding_merge_extension_ is not None:
-            _webui_embedding_merge_extension_(p)
-
-class Exception_From_EmbeddingMergeExtension(Exception):
-    pass
-class Exception_From_EmbeddingMergeExtension_():
-    def __init__(self,_):
-        self._ = _
-    def __getattr__(self,_):
-        raise Exception_From_EmbeddingMergeExtension(self._)
-
 def _webui_embedding_merge_():
+
+    class Exception_From_EmbeddingMergeExtension(Exception):
+        pass
+    class Exception_From_EmbeddingMergeExtension_():
+        def __init__(self,_):
+            self._ = _
+        def __getattr__(self,_):
+            raise Exception_From_EmbeddingMergeExtension(self._)
 
     def gr_tab():
         with gradio.Blocks(analytics_enabled=False) as block:
@@ -49,7 +56,7 @@ def _webui_embedding_merge_():
                     gradio.Markdown("## View text or embeddings vectors\n\nYou can paste your vanilla prompt (without any other special syntax) into the textbox below to see how it is parsed by WebUI. All of detected Textual Inversion embeddings will be extracted and presented to you along with literal text tokens. For example:\n\n>intergalactic train, masterpiece, by Danh Víµ")
                     with gradio.Accordion('More about table columns and grouping of its rows...', open=False):
                         gradio.Markdown('### Rows:\n\n- `By none` = interpret the prompt as a whole, extracting all characters from real tokens\n- `By comma` = split the prompt by tags on commas, removing commas but keeping source space characters\n- `By parts` (default) = split at TI embeddings, joining text parts together, keeping spaces\n- `By words` = split only after tokens that actually produce space character at the end\n- `By tokens` = split at everything except characters that are represented with more than one vector\n- `By vectors` = show all vectors separated, even for TI embeddings\n\n### Columns:\n\n- `Index` = index of one vector or index range (inclusive) for this row\n- `Vectors` = number of final vectors for this row (to clearly see it)\n- `Text` = original or recreated from tokens text, enclosed in quotes for clarity\n- `Token` = list of CLIP token numbers that represent this row; for TI embeddings \\* or \\*_X where X is the index of current embedding vector\n- `Min` = lowest (negative) value of the vector or grouped vectors values\n- `Max` = largest value\n- `Sum` = sum of all values with sign\n- `Abs` = sum of modulus of each value, without sign (always positive)\n- `Len` = vector length in L2 norm, square root of sum of squared values (computed approximate)')
-                    gradio.Markdown("## Test merge expression:\n\nYou can enter a \"merge expression\" that starts with a single quote, to see how it will be parsed and combined by this extension. It should contain single quotes around literal texts or TI embeggings, and special operators between them. For example:\n\n>'greg rutkowski'/4+'gustav dore'*0.75")
+                    gradio.Markdown("## Test merge expression:\n\nYou can enter a \"merge expression\" that starts with a single quote, to see how it will be parsed and combined by this extension. It should contain single quotes around literal texts or TI embeddings, and special operators between them. For example:\n\n>'greg rutkowski'/4+'gustav dore'*0.75")
                     with gradio.Accordion('More about merge expression syntax...', open=False):
                         gradio.Markdown("- `  'one' + 'two'  ` = blend vectors together by simple sum of all values. If length is different, smallest part will be right-padded with zeroes.\n\n- `  'one' - 'two'  ` = as above, but subtraction. Note that + and - can be put only between textual parts and will have lowest priority.\n\n- `  'text' * NUM  ` = multiply all vectors of quoted literal by numeric value. You can use floating point (0.85) and negative numbers (-1), but not arithmetic expressions.\n\n- `  'text' / NUM  ` = division by number, just as multiplication above. Applies to previous text literal but after similar operations, so you can multiply and divide together (\*3/5)\n\n- `  'text' : NUM  ` = change vector count of literal, to shrink or enlarge (padded with zeros). Only integer without sign!\n\n- `  'text' :+ NUM  ` and `  'text'  :- NUM  ` = circular rotate vectors in this token, for example +1 will shift index of each vector by one forward, wrapping on last.\n\nTo apply multiplication (or division), cropping or shifting *to the result* of addition (or subtraction), you cannot use parenthesis; instead, try this syntax:\n\n- `  'one' + 'two' =* NUM ` = will multiply the sum of 'one' and 'two', but not 'two' alone\n\n- `  'one' + 'two' =/ NUM  ` = divide the sum (or any number of sums to the left), effectively the \"result\" of everything\n\n- `  'one' + 'two' =: NUM  ` = crop or enlarge the results\n\n- `  'one' + 'two' =:+ NUM  ` or `  'one' + 'two' =:- NUM  ` = rotate the result\n\nThus, the following operations are doing the same:\n\n>`  'a'/2 + 'b'/2 + '':1 - 'd'  `   \n`  'a'+'b' =* 0.5 + 'c'*0 + 'd'*-1  `")
                     gradio.Markdown("## Several merge expressions in prompt:\n\nIf you put a valid merge expression enclosed in angular <'…' …> or curly {'…' …} brackets anywhere in your prompt (with no space between `<` or `{` and `'`), it will be parsed and merged into one temporary Textual Inversion embedding, which replaces the expression itself. The resulting prompt will be joined from those embeddings and anything between expressions. For example:\n\n>A photo of <'cat'+'dog'>, {'4k'+'dynamic lighting'+'science fiction'=/3} masterpiece")
@@ -243,7 +250,7 @@ def _webui_embedding_merge_():
     reg_clean = re.compile(r'\s+')
     reg_oper = re.compile(r'(=?)(?:([*/])([+-]?[0-9]*(?:\.[0-9]*)?)|:([+-]?)(-?[0-9]+))')
 
-    def gr_parser(text):
+    def merge_parser(text):
         orig = '"'+text+'"'
         text = text.replace('\0',' ')+' '
         length = len(text)
@@ -625,7 +632,7 @@ def _webui_embedding_merge_():
             if gr_text[:1]=="'":
                 clipskip = opts.CLIP_stop_at_last_layers
                 opts.CLIP_stop_at_last_layers = 1
-                (res,err) = gr_parser(gr_text)
+                (res,err) = merge_parser(gr_text)
                 opts.CLIP_stop_at_last_layers = clipskip
                 if (res is not None) and res.numel()==0:
                     err = 'Result is ZERO vectors!'
@@ -873,7 +880,7 @@ def _webui_embedding_merge_():
                 if part in parts:
                     embed = parts[part]
                 else:
-                    (res,err) = gr_parser(part)
+                    (res,err) = merge_parser(part)
                     if err is not None:
                         return (None,err)
                     if only_count:
@@ -935,20 +942,19 @@ def _webui_embedding_merge_():
 
     try:
         cls = modules.sd_hijack.StableDiffusionModelHijack
+        get_prompt_lengths = cls.get_prompt_lengths
         field = '__embedding_merge_wrapper'
         def hook_prompt_lengths(self,text):
             if text.find("<'")<0 and text.find("{'")<0:
                 return get_prompt_lengths(self,text)
             (cnt,err) = merge_one_prompt(None,{},{},None,text,True,True)
-            print(cnt,err)
             if err is not None:
                 return -1,-1
             return cnt, self.clip.get_target_prompt_token_count(cnt)
-        if hasattr(cls,field):
-            get_prompt_lengths = getattr(cls,field)
-        else:
-            get_prompt_lengths = cls.get_prompt_lengths
-            setattr(cls,field,get_prompt_lengths)
+        if hasattr(get_prompt_lengths,field):
+            get_prompt_lengths = getattr(get_prompt_lengths,field)
+        cls.get_prompt_lengths = hook_prompt_lengths
+        setattr(hook_prompt_lengths,field,get_prompt_lengths)
         cls.get_prompt_lengths = hook_prompt_lengths
     except:
         traceback.print_exc()
@@ -976,16 +982,41 @@ def _webui_embedding_merge_():
                 result['Prompt'] = dict_replace(reparse,result['Prompt'])
             if 'Negative prompt' in result:
                 result['Negative prompt'] = dict_replace(reparse,result['Negative prompt'])
-
-    global _webui_embedding_merge_extension_
-    _webui_embedding_merge_extension_ = embedding_merge_extension
-    embedding_merge_dir()
-    
     setattr(_webui_embedding_merge_,'on_infotext_pasted',on_infotext_pasted)
     
+    def on_script_unloaded():
+        try:
+            cls = modules.sd_hijack.StableDiffusionModelHijack
+            get_prompt_lengths = cls.get_prompt_lengths
+            field = '__embedding_merge_wrapper'
+            if hasattr(get_prompt_lengths,field):
+                cls.get_prompt_lengths = getattr(get_prompt_lengths,field)
+        except:
+            traceback.print_exc()
+        try:
+            db = modules.sd_hijack.model_hijack.embedding_db
+            field = '__embedding_merge_cache'
+            if hasattr(db,field):
+                delattr(db,field)
+        except:
+            traceback.print_exc()
+    setattr(_webui_embedding_merge_,'on_script_unloaded',on_script_unloaded)
+    
+    setattr(_webui_embedding_merge_,'embedding_merge_extension',embedding_merge_extension)
+    embedding_merge_dir()
     return gr_tab
+
+class EmbeddingMergeExtension(scripts.Script):
+    def title(self):
+        return 'Embedding Merge'
+    def show(self,is_img2img):
+        return scripts.AlwaysVisible
+    def process(self,p):
+        if hasattr(_webui_embedding_merge_,'embedding_merge_extension'):
+            getattr(_webui_embedding_merge_,'embedding_merge_extension')(p)
 
 script_callbacks.on_ui_tabs(_webui_embedding_merge_())
 script_callbacks.on_infotext_pasted(_webui_embedding_merge_.on_infotext_pasted)
+script_callbacks.on_script_unloaded(_webui_embedding_merge_.on_script_unloaded)
 
 #EOF
