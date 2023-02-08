@@ -11,6 +11,20 @@ https://github.com/klimaleksus/stable-diffusion-webui-embedding-merge
 ```
 Also you may clone/download this repository and put it to `stable-diffusion-webui/extensions` directory.
 
+## Screenshots:
+ 
+#### Inspecting vectors of a regular prompt:
+
+[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_table1.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_table1.png)
+
+#### Constructing a merge expression and saving it to embedding file:
+
+[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_table2.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_table2.png)
+
+#### Debugging a prompt with merge expressions inside it:
+
+[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_table3.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_table3.png)
+
 ## Purpose:
 
 Did you know that StableDiffusion reads your prompt by so-called tokens? They are multidimensional numerical vectors that construct together words and phrases.
@@ -37,7 +51,7 @@ Also use `<'your words'*0.5>` (or any number, default is 1.0) to increase or dec
 To use attention with round brackets ( ), put them around < >, like `(<'one'+'two'>:0.9)`  
 Use as many <> in one prompt, as you want; also you can put your existing TI embedding names inside `' '`.
 
-If you need literal <' for some reason, put a space between.  
+When you need literal <' for some reason, put a space between.  
 If some other extension interferes with this syntax, change angular brackets to curly: `{'also works'*4}`
 
 ## View text or embeddings vectors
@@ -148,11 +162,11 @@ Notes:
 - Values lower than 0.5 and near to 0.0 are greatly reducing subject weight indeed! Up to its complete absence (which is not possible otherwise, for example even zero attention `(word:0)` does not eliminate "word" from the prompt)
 - High numbers might increase the presence of an object, not in quantity but in essence. Very high multipliers (above 10) corrupt the subject, but still don't destroy the image itself.
 
-Eliminating a part of the negative prompt by zeroing its vectors can be used to understand the effect of the part in question, without shifting the rest of the text otherwise. Since WebUI is splitting long prompts at commas (and then merging resulting parts together), simple deletion of a part might change things severely.
+Eliminating a part of the negative prompt by zeroing its vectors can be used to understand the effect of the part in question, without shifting the rest of the text otherwise. Since WebUI is splitting long prompts at arbitrary commas (and then merging resulting parts together), simple deletion of a part might change things severely.
 
 ## Using merge expressions in prompts at runtime!
 
-You can actually put merge expressions in angular or curly brackets into your txt2img or img2img prompt in WebUI. This extension will intercept both main and negative prompts, parse and merge expressions creating temporary TI embeddings that WebUI will "see" instead of your original text. In generation info there will be internal meaningless names like <'EM_1'>, but extra parameter "EmbeddingMerge" will contain original merge expressions. To quickly restore your prompts, just paste your complete generation information (from .txt or PNG Info) into the textbox on this tab (also it should work for the official "paste" toolbar button too) – its temporary embeddings will be replaced back with expressions, for example:
+You can actually put merge expressions in angular or curly brackets into your txt2img or img2img prompt in WebUI. This extension will intercept both main and negative prompts, parse and merge expressions creating temporary TI embeddings that WebUI will "see" instead of your original text. In generation info there will be internal meaningless names like <'EM_1'>, but extra parameter "EmbeddingMerge" will contain original merge expressions. To quickly restore your prompts, just paste your complete generation information (from .txt or PNG Info) into the textbox on EM tab (also it should work for the official "paste" toolbar button too) – its temporary embeddings will be replaced back with expressions, for example:
 
 > a photo of <'EM_1'>  
 Negative prompt: {'EM_2'}  
@@ -172,7 +186,7 @@ Steps: 8, Sampler: DPM++ 2M Karras, CFG scale: 7, Seed: 1374372309, Size: 512x51
 
 – results in something barely distinct from zeroing the term altogether.
 
-#### Subtracting concepts as word2vec:
+#### Subtracting concepts as in word2vec:
 
 > Full-body photo of a <'king'-'man'+'woman'>  
 Detailed photo of <'yellow'-'red'> car
@@ -181,10 +195,86 @@ Detailed photo of <'yellow'-'red'> car
 
 #### Simulating negative prompt via negation of words:
 
-> A portrait of the princess. <'frame, black-white'*-1>
+> A portrait of the princess. <'frame, black-white'*-1>  
+A cat is chasing a dog. <''-'road'-'grass'>
 
 – will still add those concepts to positive prompt, but with weird presence. You could find more luck with small values `-0.1-0.0` though.
 
 ## Gallery!
 
-TODO
+All of the images below were created on `sd-v1-5-inpainting` with 32 steps of Euler_a.
+
+### Merging things together:
+
+> a realistic photo of the XXX in rainbow dress standing on a shore. Symmetric face, full-body portrait, award-winning masterpiece.  
+Negative prompt: bad anatomy, ugly, cropped
+
+XXX = `doll`: _(starting from this prompt)_
+
+[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_1_1.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_1_1.png)
+
+XXX = `girl`: _(what if we change the subject?)_
+
+[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_1_2.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_1_2.png)
+
+XXX = `<'girl'+'doll'>`: _(merging them together!)_
+
+[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_1_3.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_1_3.png)
+
+XXX = `<'girl'+'doll'=/2>`: _(see, you don't have to equalize the sum, difference is negligible)_
+
+[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_1_4.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_1_4.png)
+
+XXX = `<'girl'/2+'doll'>`: _(halving girl's weight to reveal more essence from a doll)_
+
+[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_1_5.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_1_5.png)
+
+### Weighting words in prompt:
+
+> a XXX is standing on a top of YYY. Rare naturalistic photography.
+
+XXX = `peacock`, YYY = `giraffe`: _(starting prompt, not really working as requested though)_
+
+[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_2_1.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_2_1.png)
+
+XXX = `<'peacock'*0.5>`, YYY = `giraffe`: _(less blue bird, more brown animals)_
+
+[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_2_2.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_2_2.png)
+
+XXX = `peacock`, YYY = `<'giraffe'*0.5>`: _(less animal, more birds!)_
+
+[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_2_3.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_2_3.png)
+
+XXX = `<'peacock'*4>`, YYY = `<'giraffe'*2>`: _(increase both, looks like "on top" is now shadowed by their heavy weight)_
+
+[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_2_4.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_2_4.png)
+
+XXX = `<'peacock'*0>`, YYY = `<'giraffe'*0>`: _(completely remove both words without a trace!)_
+
+[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_2_5.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_2_5.png)
+
+### Combine art styles:
+
+> Epic fantasy photography: a gigantic robot is stepping on a small city. Art by XXX style.
+
+XXX = `<'greg rutkowski'+'hayao miyazaki'>`: _(this is what we can get by merging)_
+
+[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_3_1.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_3_1.png)
+
+XXX = `hayao miyazaki`: _(mr. Miyazaki alone looks like this)_
+
+[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_3_2.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_3_2.png)
+
+XXX = `greg rutkowski`: _(and our Greg alone like this)_
+
+[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_3_3.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_3_3.png)
+
+XXX = `greg rutkowski and hayao miyazaki`: _(they both mentioned together otherwise)_
+
+[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_3_4.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_3_4.png)
+
+XXX = `hayao miyazaki and greg rutkowski`: _(reversed order, still not the same as merging!)_
+
+[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_3_5.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_gallery_3_5.png)
+
+### EOF
