@@ -1,3 +1,5 @@
+### Discussion: https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/7659
+
 # embedding-merge
 
 This is extension for [AUTOMATIC1111/stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui) for creating and merging Textual Inversion embeddings at runtime from string literals.
@@ -96,7 +98,7 @@ In EM tab you can enter a "merge expression" that starts with a single quote, to
 
 >'greg rutkowski'/4+'gustav dore'*0.75
 
-### expression syntax...
+### Expression syntax:
 
 - `'one' + 'two'` = blend vectors together by simple sum of all values. If length is different, smallest part will be right-padded with zeroes.
 - `'one' - 'two'` = as above, but subtraction. Note that + and - can be put only between textual parts and will have lowest priority.
