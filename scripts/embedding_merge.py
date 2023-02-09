@@ -1092,20 +1092,30 @@ A cat is chasing a dog. <''-'road'-'grass'>
         texts = {}
         parts = {}
         used = {}
-        arr = [
+        pair = [[
             p.all_prompts,
             p.prompt if type(p.prompt)==list else [p.prompt],
+        ],[
             p.all_negative_prompts,
             p.negative_prompt if type(p.negative_prompt)==list else [p.negative_prompt],
-        ]
-        for one in arr:
-            if one is not None:
-                for i in range(len(one)):
-                    (res,err) = merge_one_prompt(cache,texts,parts,used,one[i],True,False)
-                    if err is not None:
-                        raise_sd_error(p,'\n\nEmbedding Merge failed - '+err+'\n')
-                        return
-                    one[i] = res
+        ]]
+        for arr in pair:
+            ok = False
+            fail = None
+            for one in arr:
+                if one is not None:
+                    for i in range(len(one)):
+                        (res,err) = merge_one_prompt(cache,texts,parts,used,one[i],True,False)
+                        if err is not None:
+                            if fail is None:
+                                fail = err
+                        else:
+                            one[i] = res
+                            ok = True
+            if not ok and fail is not None:
+                raise_sd_error(p,'\n\nEmbedding Merge failed - '+err+'\n')
+                return
+        arr = pair[0]+pair[1]
         p.all_prompts = arr[0]
         p.all_negative_prompts = arr[2]
         p.prompt = arr[1] if type(p.prompt)==list else arr[1][0]
