@@ -429,7 +429,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
     reg_clean = re.compile(r'\s+')
     reg_oper = re.compile(r'(=?)(?:([*/])([+-]?[0-9]*(?:\.[0-9]*)?)|:([+-]?)(-?[0-9]+))')
 
-    def merge_parser(text):
+    def merge_parser(text,only_count):
         orig = '"'+text+'"'
         text = text.replace('\0',' ')+' '
         length = len(text)
@@ -561,23 +561,27 @@ A cat is chasing a dog. <''-'road'-'grass'>
         for act in actions:
             if act['M'] and (left is not None):
                 if add!=0:
-                    (vectors1,length1) = left.size()
-                    (vectors2,length2) = right.size()
-                    if length1!=length2:
-                        return (None,'Cannot merge different embeddings in '+orig)
-                    if vectors1!=vectors2:
-                        if vectors1<vectors2:
-                            target = torch.zeros(vectors2,length1).to(device=devices.device,dtype=torch.float32)
-                            target[0:vectors1] = left
-                            left = target
-                        else:
-                            target = torch.zeros(vectors1,length2).to(device=devices.device,dtype=torch.float32)
-                            target[0:vectors2] = right
-                            right = target
-                    if add>0:
-                        right = left+right
+                    if only_count:
+                        if left>right:
+                            right = left
                     else:
-                        right = left-right
+                        (vectors1,length1) = left.size()
+                        (vectors2,length2) = right.size()
+                        if length1!=length2:
+                            return (None,'Cannot merge different embeddings in '+orig)
+                        if vectors1!=vectors2:
+                            if vectors1<vectors2:
+                                target = torch.zeros(vectors2,length1).to(device=devices.device,dtype=torch.float32)
+                                target[0:vectors1] = left
+                                left = target
+                            else:
+                                target = torch.zeros(vectors1,length2).to(device=devices.device,dtype=torch.float32)
+                                target[0:vectors2] = right
+                                right = target
+                        if add>0:
+                            right = left+right
+                        else:
+                            right = left-right
                 left = None
             A = act['A']
             if A==None:
@@ -587,6 +591,8 @@ A cat is chasing a dog. <''-'road'-'grass'>
                 right = grab_vectors(line)
                 if right==None:
                     return (None,'Failed to parse \''+line+'\' in '+orig)
+                if only_count:
+                    right = right.size(0)
             elif A==False:
                 if act['V']:
                     add = 1
@@ -597,30 +603,34 @@ A cat is chasing a dog. <''-'road'-'grass'>
             else:
                 s = act['S']
                 r = act['R']
-                if r!=0:
-                    right = right.roll(r,dims=0)
+                if only_count:
+                    if (r==0)and(s>=0):
+                        right = s
                 else:
-                    if s>=0:
-                        (vectors,length) = right.size()
-                        if vectors>s:
-                            right = right[0:s]
-                        elif vectors<s:
-                            target = torch.zeros(s,length).to(device=devices.device,dtype=torch.float32)
-                            target[0:vectors] = right
-                            right = target
-                    elif act['W']==True:
-                        right = right*act['V']
-                    elif  act['W']==False:
-                        right = right/act['V']
+                    if r!=0:
+                        right = right.roll(r,dims=0)
+                    else:
+                        if s>=0:
+                            (vectors,length) = right.size()
+                            if vectors>s:
+                                right = right[0:s]
+                            elif vectors<s:
+                                target = torch.zeros(s,length).to(device=devices.device,dtype=torch.float32)
+                                target[0:vectors] = right
+                                right = target
+                        elif act['W']==True:
+                            right = right*act['V']
+                        elif  act['W']==False:
+                            right = right/act['V']
         return (right,None)
 
     def grab_embedding_cache():
         db = modules.sd_hijack.model_hijack.embedding_db
-        field = '__embedding_merge_cache'
+        field = '__embedding_merge_cache_'
         if hasattr(db,field):
             cache = getattr(db,field)
         else:
-            cache = {'_':0,'-':0}
+            cache = {'_':0,'-':0,'/':0}
             setattr(db,field,cache)
         return cache
         
@@ -648,26 +658,27 @@ A cat is chasing a dog. <''-'road'-'grass'>
         self.ids_lookup[first_id] = sorted(old + save, key=lambda x: len(x[0]), reverse=True)
         return embedding
 
-    def make_temp_embedding(name,vectors,cache):
-        if (name is None) or (name==''):
-            return
-        name = name.strip()
-        shape = vectors.size()
+    def make_temp_embedding(name,vectors,cache,fake):
         if name in cache:
             embed = cache[name]
+            if fake>0:
+                return
         else:
+            if fake>0:
+                vectors = torch.zeros((fake,16))
             embed = Embedding(vectors,name)
             cache[name] = embed
         embed.vec = vectors
         embed.step = None
+        shape = vectors.size()
         embed.vectors = shape[0]
         embed.shape = shape[-1]
+        embed.cached_checksum = None
         embed.filename = ''
         register_embedding(name,embed)
     
     def reset_temp_embeddings(prod):
         cache = grab_embedding_cache()
-        prod = '_' if prod else '-'
         num = cache[prod]
         cache[prod] = 0
         for a,b in (('<','>'),('{','}')):
@@ -680,26 +691,27 @@ A cat is chasing a dog. <''-'road'-'grass'>
                     embed.shape = None
                     embed.vectors = 0
                     embed.cached_checksum = None
+                    del cache[tgt]
                 i = i-1
         return cache
 
-    def add_temp_embedding(vectors,cache,prod,curly):
-        prod = '_' if prod else '-'
-        num = 1+(cache[prod] or 0)
+    def add_temp_embedding(vectors,cache,prod,curly,fake):
+        if fake>0:
+            prod = '/'
+            num = (cache[prod] or 0)
+            if fake>num:
+                cache[prod] = fake
+            num = fake
+        else:
+            prod = '_' if prod else '-'
+            num = 1+(cache[prod] or 0)
+            cache[prod] = num
         name = "'EM"+prod+str(num)+"'"
         if curly:
             name = '{'+name+'}'
         else:
             name = '<'+name+'>'
-        cache[prod] = num
-        if name in cache:
-            embed = cache[name]
-            embed.vec = vectors
-            shape = vectors.size()
-            embed.vectors = shape[0]
-            embed.shape = shape[-1]
-            embed.cached_checksum = None
-        make_temp_embedding(name,vectors,cache)
+        make_temp_embedding(name,vectors,cache,fake)
         return name
     
     def parse_infotext(text):
@@ -811,7 +823,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
             if gr_text[:1]=="'":
                 clipskip = opts.CLIP_stop_at_last_layers
                 opts.CLIP_stop_at_last_layers = 1
-                (res,err) = merge_parser(gr_text)
+                (res,err) = merge_parser(gr_text,False)
                 opts.CLIP_stop_at_last_layers = clipskip
                 if (res is not None) and res.numel()==0:
                     err = 'Result is ZERO vectors!'
@@ -828,9 +840,9 @@ A cat is chasing a dog. <''-'road'-'grass'>
                     txt += '</table>'
                 return ('<center>'+txt+'</center>',need_save_embed(store,gr_name,res),gr_orig)
             if gr_text.find("<'")>=0 or gr_text.find("{'")>=0:
-                cache = reset_temp_embeddings(False)
+                cache = reset_temp_embeddings('-')
                 used = {}
-                (res,err) = merge_one_prompt(cache,{},{},used,gr_text,False,False)
+                (res,err) = merge_one_prompt(cache,None,{},used,gr_text,False,False)
                 if err is not None:
                     txt = '<b style="'+font+'">Embedding Merge failed - '+html.escape(err)+'</b>'
                     return ('<center>'+txt+'</center>',gr_name,gr_orig)
@@ -1021,13 +1033,12 @@ A cat is chasing a dog. <''-'road'-'grass'>
 
     def merge_one_prompt(cache,texts,parts,used,prompt,prod,only_count):
         try:
-            if only_count:
-                clip = modules.sd_hijack.model_hijack.clip
             cnt = 0
             if (prompt is None) or (prompt==''):
-                return (prompt,None) if not only_count else (0,None)
-            if prompt in texts:
-                return (texts[prompt],None)
+                return (prompt,None)
+            if texts is not None:
+                if prompt in texts:
+                    return (texts[prompt],None)
             orig = prompt
             left = 0
             while True:
@@ -1039,11 +1050,8 @@ A cat is chasing a dog. <''-'road'-'grass'>
                 else:
                     curly = False
                 if left<0:
-                    if only_count:
-                        _, token_count = clip.process_texts([prompt])
-                        cnt += token_count
-                        prompt = cnt
-                    texts[orig] = prompt
+                    if texts is not None:
+                        texts[orig] = prompt
                     return (prompt,None)
                 right = left
                 while True:
@@ -1059,36 +1067,31 @@ A cat is chasing a dog. <''-'road'-'grass'>
                 if part in parts:
                     embed = parts[part]
                 else:
-                    (res,err) = merge_parser(part)
+                    (res,err) = merge_parser(part,only_count)
                     if err is not None:
                         return (None,err)
                     if only_count:
-                        if (res is None) or (res.numel()==0):
-                            embed = 0
+                        if (res is None) or (res==0):
+                            embed = ''
                         else:
-                            embed = res.size(0)
+                            embed = add_temp_embedding(None,cache,prod,curly,res)
                     else:
                         if (res is None) or (res.numel()==0):
                             embed = ''
                         else:
-                            embed = add_temp_embedding(res,cache,prod,curly)
-                            used[embed] = part
-                parts[part] = embed
-                if only_count:
-                    _, token_count = clip.process_texts([prompt[:left]])
-                    cnt += token_count+embed
-                    prompt = prompt[right+1:]
-                    left = 0
-                else:
-                    prefix = prompt[:left].rstrip()+' '+embed
-                    left = len(prefix)
-                    prompt = prefix+' '+(prompt[right+1:].lstrip())
+                            embed = add_temp_embedding(res,cache,prod,curly,0)
+                    if used is not None:
+                        used[embed] = part
+                    parts[part] = embed
+                prefix = prompt[:left].rstrip()+' '+embed
+                left = len(prefix)
+                prompt = prefix+' '+(prompt[right+1:].lstrip())
         except:
             traceback.print_exc()
             return (None,'Fatal error?')
 
     def embedding_merge_extension(p):
-        cache = reset_temp_embeddings(True)
+        cache = reset_temp_embeddings('_')
         texts = {}
         parts = {}
         used = {}
@@ -1136,13 +1139,12 @@ A cat is chasing a dog. <''-'road'-'grass'>
         def hook_prompt_lengths(self,text):
             if text.find("<'")<0 and text.find("{'")<0:
                 return get_prompt_lengths(self,text)
-            (cnt,err) = merge_one_prompt(None,{},{},None,text,True,True)
+            (res,err) = merge_one_prompt(grab_embedding_cache(),None,{},None,text,True,True)
             if err is not None:
                 return -1,-1
-            return cnt, self.clip.get_target_prompt_token_count(cnt)
+            return get_prompt_lengths(self,res)
         if hasattr(get_prompt_lengths,field):
             get_prompt_lengths = getattr(get_prompt_lengths,field)
-        cls.get_prompt_lengths = hook_prompt_lengths
         setattr(hook_prompt_lengths,field,get_prompt_lengths)
         cls.get_prompt_lengths = hook_prompt_lengths
     except:
@@ -1174,6 +1176,9 @@ A cat is chasing a dog. <''-'road'-'grass'>
     setattr(_webui_embedding_merge_,'on_infotext_pasted',on_infotext_pasted)
     
     def on_script_unloaded():
+        reset_temp_embeddings('_')
+        reset_temp_embeddings('-')
+        reset_temp_embeddings('/')
         try:
             cls = modules.sd_hijack.StableDiffusionModelHijack
             get_prompt_lengths = cls.get_prompt_lengths
@@ -1184,7 +1189,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
             traceback.print_exc()
         try:
             db = modules.sd_hijack.model_hijack.embedding_db
-            field = '__embedding_merge_cache'
+            field = '__embedding_merge_cache_'
             if hasattr(db,field):
                 delattr(db,field)
         except:
