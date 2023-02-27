@@ -1,3 +1,5 @@
+**Latest update:** added `'text',NUM` operator for concatenation of strings and raw token index sequences!
+
 ### Discussion: https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/7659
 
 # embedding-merge
@@ -7,7 +9,8 @@ This is extension for [AUTOMATIC1111/stable-diffusion-webui](https://github.com/
 It creates a tab named `EM`
 
 ## Installation:
-Copy the link to this repository into `Extension index URL` in WebUI Extensions tab:
+This extension is included into the official index! Just use `Available → Load from` in WebUI Extensions tab.  
+Or copy the link to this repository into `Install from URL`:
 ```
 https://github.com/klimaleksus/stable-diffusion-webui-embedding-merge
 ```
@@ -17,15 +20,15 @@ Also you may clone/download this repository and put it to `stable-diffusion-webu
  
 #### Inspecting vectors of a regular prompt:
 
-[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_table1.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_table1.png)
+[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_newtable1.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_newtable1.png)
 
 #### Constructing a merge expression and saving it to embedding file:
 
-[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_table2.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_table2.png)
+[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_newtable2.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_newtable2.png)
 
 #### Debugging a prompt with merge expressions inside it:
 
-[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_table3.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_table3.png)
+[![](https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_newtable3.jpg)]( https://klimaleksus2.ucoz.ru/sd/embedding-merge/embedding-merge_newtable3.png)
 
 ## Purpose:
 
@@ -82,6 +85,7 @@ You can paste your vanilla prompt (without any other special syntax) into the te
 - `Sum` = sum of all values with sign
 - `Abs` = sum of modulus of each value, without sign (always positive)
 - `Len` = vector length in L2 norm, square root of sum of squared values (computed approximate)
+- `Std` = standard deviation for vector values.
 
 ### Why do you need it:
 
@@ -106,8 +110,9 @@ In EM tab you can enter a "merge expression" that starts with a single quote, to
 - `'text' / NUM` = division by number, just as multiplication above. Applies to previous text literal but after previous similar operations, so you can multiply and divide together (\*3/5)
 - `'text' : NUM` = change vector count of literal, to shrink or enlarge (padded with zeros). Only integer without sign!
 - `'text' :+ NUM` and `'text'  :- NUM` = circular rotate vectors in this token, for example +1 will shift index of each vector by one forward, wrapping on last.
+- `'text',NUM` (chainable as `'a',B,'c','d',E,F…`) = concatenate text with a token by its numerical index (so, to get any pure token – use empty left string: `'',256`). Special tokens: `0000` = "start token" (index 49406), `000` = "end token" (index 49407), `00` = "padding token" (also 49407 for SD1, but 0 for SD2). Token number `0` is not zero-vector, but for some reason counts as symbol "!" without a space after it, which is impossible to normally enter anyway.
 
-To apply multiplication (or division), cropping or shifting *to the result* of addition (or subtraction), you cannot use parenthesis; instead, try this syntax:
+To apply multiplication (or division), cropping or shifting **to the result** of addition (or subtraction), you cannot use parenthesis; instead, try this syntax:
 
 - `'one' + 'two' =* NUM` = will multiply the sum of 'one' and 'two', but not 'two' alone
 - `'one' + 'two' =/ NUM` = divide the sum (or any number of sums to the left), effectively the "result" of everything
@@ -119,20 +124,33 @@ Thus, the following operations are doing the same:
 >`'a'/2 + 'b'/2 + '':1 - 'd'`  
 `'a'+'b' =* 0.5 + 'c'*0 + 'd'*-1`
 
-There is no "concatenation" operator (since you will be able to concatenate several separate merge expressions later), but you may replicate it with addition of the same text enlarged and shifted, if you need.  
+There is no true "concatenation" operator (since you will be able to concatenate several separate merge expressions later), but you may replicate it with addition of the same text enlarged and shifted, if you need.  
+Operation "," has the highest priority (it will directly construct the string before doing anything else), so you cannot concatenate anything to the result of addition or multiplication. Use it only to add tokens by index in your text.
+
 For example, repeating a two-vector word, resulting in 4 vectors of two equal pairs:
 
-> 'artstation' + 'artstation' :4 :+2
+> 'artstation' + 'artstation' :4 :+2  
+> 'artstation','artstation'
 
 You can use shifting to join several vectors of the same text together. For example, given a 4-vectors word you may merge those vectors in one:
 
-> 'kuvshinov' + 'kuvshinov':-1 + 'kuvshinov':-2 + 'kuvshinov':-3 =: 1
+> 'kuvshinov' + 'kuvshinov':-1 + 'kuvshinov':-2 + 'kuvshinov':-3 =: 1  
+> '',1836 + '',85 + '',43074 + '',341
+
+Note that those indices are referring to "ku|v|shino|v[space]" and cannot be entered from raw text, since it would be parsed as "ku[space]", "v[space]" and "shino[space]", which are different tokens!
+
+When you merge strings of unequal length, shortest one is padded with zero vectors; if you want to pad it with something else, you should check the vector count and concatenate accordingly:
+
+> 'close-up',00,00 + 'out-of-frame' + 'cropped',00,00,00,00  
+> 'up',00,00+'of-frame'+'',00,00,00 =:5:+2 + 'close-'+'out-'+'cropped',00
 
 ### Why do you need it:
 
 To prepare your expression and fix any errors. You can evaluate its correctness by roughly comparing numbers in table (for example, adding vectors will generally result in higher `Abs` value; while multiplication is directly changing all numbers straightforwardly).
 
 If for some reason you couldn't use the syntax for merging prompts at runtime, at least you will be able to enter a name and create a regular TI embedding from your merge expression. Then you may use it even without this extension installed!
+
+Also you can check numerical parameters of your trained textual embedding and compare it with "normal" vectors. For example, very large `Len` or `Std` will mean that something is wrong and at least you may divide it in attempt to fix.
 
 ## Several merge expressions in prompt:
 
