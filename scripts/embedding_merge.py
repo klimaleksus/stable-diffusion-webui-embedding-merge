@@ -11,10 +11,10 @@ WebUI Dependencies:
 3) Saving of embedding is done by calling <modules.textual_inversion.textual_inversion.create_embedding(name, num_vectors_per_token, overwrite_old, init_text='*')>
      and then editing .pt file, plus <modules.sd_hijack.model_hijack.embedding_db.load_textual_inversion_embeddings()>
      also <modules.sd_hijack.model_hijack.embedding_db.add_embedding_dir(path)> is used.
-4) <modules.sd_hijack.StableDiffusionModelHijack.get_prompt_lengths(text)> is replaced,
-     expecting to return tuple <(token_count, self.clip.get_target_prompt_token_count(token_count))>
-5) <modules.sd_hijack.model_hijack.clip.process_texts(texts)> is called, expecting to return a tuple
-     with second argument equal to token count of provided text.
+4) <modules.sd_hijack.StableDiffusionModelHijack.get_prompt_lengths(text)> is hooked but not replaced.
+5) Part of encode_embedding_init_text() from sd_hijack_clip.py and sd_hijack_open_clip.py is converted to
+     tokens_to_vectors() here; it uses shared.sd_model.cond_stage_model.wrapped and then call either
+     .model.token_embedding.wrapped() for SD2, or .transformer.text_model.embeddings.token_embedding.wrapped() for SD1
 6) Code from <https://github.com/AUTOMATIC1111/stable-diffusion-webui-tokenizer> is heavily copied:
      it grabs <shared.sd_model.cond_stage_model.wrapped> and checks it against
      <FrozenCLIPEmbedder> and <FrozenOpenCLIPEmbedder>, refer to tokens_to_text() here.
@@ -113,6 +113,7 @@ You can paste your vanilla prompt (without any other special syntax) into the te
 - `Sum` = sum of all values with sign
 - `Abs` = sum of modulus of each value, without sign (always positive)
 - `Len` = vector length in L2 norm, square root of sum of squared values (computed approximate)
+- `Std` = standard deviation for vector values.
 
 ### Why do you need it:
 
@@ -140,8 +141,9 @@ In EM tab you can enter a "merge expression" that starts with a single quote, to
 - `'text' / NUM` = division by number, just as multiplication above. Applies to previous text literal but after previous similar operations, so you can multiply and divide together (\*3/5)
 - `'text' : NUM` = change vector count of literal, to shrink or enlarge (padded with zeros). Only integer without sign!
 - `'text' :+ NUM` and `'text'  :- NUM` = circular rotate vectors in this token, for example +1 will shift index of each vector by one forward, wrapping on last.
+- `'text',NUM` (chainable as `'a',B,'c','d',E,F…`) = concatenate text with a token by its numerical index (so, to get any pure token – use empty left string: `'',256`). Special tokens: `0000` = "start token" (index 49406), `000` = "end token" (index 49407), `00` = "padding token" (also 49407 for SD1, but 0 for SD2). Token number `0` is not zero-vector, but for some reason counts as symbol "!" without a space after it, which is impossible to normally enter anyway.
 
-To apply multiplication (or division), cropping or shifting *to the result* of addition (or subtraction), you cannot use parenthesis; instead, try this syntax:
+To apply multiplication (or division), cropping or shifting **to the result** of addition (or subtraction), you cannot use parenthesis; instead, try this syntax:
 
 - `'one' + 'two' =* NUM` = will multiply the sum of 'one' and 'two', but not 'two' alone
 - `'one' + 'two' =/ NUM` = divide the sum (or any number of sums to the left), effectively the "result" of everything
@@ -153,20 +155,33 @@ Thus, the following operations are doing the same:
 >`'a'/2 + 'b'/2 + '':1 - 'd'`  
 `'a'+'b' =* 0.5 + 'c'*0 + 'd'*-1`
 
-There is no "concatenation" operator (since you will be able to concatenate several separate merge expressions later), but you may replicate it with addition of the same text enlarged and shifted, if you need.  
+There is no true "concatenation" operator (since you will be able to concatenate several separate merge expressions later), but you may replicate it with addition of the same text enlarged and shifted, if you need.  
+Operation "," has the highest priority (it will directly construct the string before doing anything else), so you cannot concatenate anything to the result of addition or multiplication. Use it only to add tokens by index in your text.
+
 For example, repeating a two-vector word, resulting in 4 vectors of two equal pairs:
 
-> 'artstation' + 'artstation' :4 :+2
+> 'artstation' + 'artstation' :4 :+2  
+> 'artstation','artstation'
 
 You can use shifting to join several vectors of the same text together. For example, given a 4-vectors word you may merge those vectors in one:
 
-> 'kuvshinov' + 'kuvshinov':-1 + 'kuvshinov':-2 + 'kuvshinov':-3 =: 1
+> 'kuvshinov' + 'kuvshinov':-1 + 'kuvshinov':-2 + 'kuvshinov':-3 =: 1  
+> '',1836 + '',85 + '',43074 + '',341
+
+Note that those indices are referring to "ku|v|shino|v[space]" and cannot be entered from raw text, since it would be parsed as "ku[space]", "v[space]" and "shino[space]", which are different tokens!
+
+When you merge strings of unequal length, shortest one is padded with zero vectors; if you want to pad it with something else, you should check the vector count and concatenate accordingly:
+
+> 'close-up',00,00 + 'out-of-frame' + 'cropped',00,00,00,00  
+> 'up',00,00+'of-frame'+'',00,00,00 =:5:+2 + 'close-'+'out-'+'cropped',00
 
 ### Why do you need it:
 
 To prepare your expression and fix any errors. You can evaluate its correctness by roughly comparing numbers in table (for example, adding vectors will generally result in higher `Abs` value; while multiplication is directly changing all numbers straightforwardly).
 
 If for some reason you couldn't use the syntax for merging prompts at runtime, at least you will be able to enter a name and create a regular TI embedding from your merge expression. Then you may use it even without this extension installed!
+
+Also you can check numerical parameters of your trained textual embedding and compare it with "normal" vectors. For example, very large `Len` or `Std` will mean that something is wrong and at least you may divide it in attempt to fix.
 ''')
                     gradio.Markdown('''
 ## Several merge expressions in prompt:
@@ -178,6 +193,7 @@ If you put a valid merge expression enclosed in angular <'…' …> or curly {'�
                     with gradio.Accordion('More examples of using angular/curly brackets...', open=False):
                         gradio.Markdown('''
 ### More examples:
+
 
 Combining different subjects or styles together, resulting in joined concepts:
 
@@ -211,7 +227,6 @@ You can actually put merge expressions in angular or curly brackets into your tx
 > a photo of <'EM_1'>  
 Negative prompt: {'EM_2'}  
 Steps: 8, Sampler: DPM++ 2M Karras, CFG scale: 7, Seed: 1374372309, Size: 512x512, Model hash: c6bbc15e32, Model: sd-v1-5-inpainting, EmbeddingMerge: "<'EM_1'>=<'sky' * 2/4 + 'forest' * 3/4>, {'EM_2'}={'blurry'+'cropped'}", Conditional mask weight: 1
-
 ''')
                     with gradio.Accordion('Limitations...', open=False):
                         gradio.Markdown('''
@@ -242,7 +257,6 @@ Detailed photo of <'yellow'-'red'> car
 A cat is chasing a dog. <''-'road'-'grass'>
 
 – will still add those concepts to positive prompt, but with weird presence. You could find more luck with small values `-0.1-0.0` though.
-
 ''')
             with gradio.Row():
                 gr_text = gradio.Textbox(value='', lines=4, max_lines=16, interactive=True, label='Your prompt (no weight/attention, do not escape parenthesis/brackets); or your merge expression (if the first character is a single quote); or a generation info to restore prompts')
@@ -405,11 +419,38 @@ A cat is chasing a dog. <''-'road'-'grass'>
         except:
             return None
 
+    def tokens_to_vectors(arr):
+        old = opts.CLIP_stop_at_last_layers
+        opts.CLIP_stop_at_last_layers = 1
+        try:
+            clip = shared.sd_model.cond_stage_model.wrapped
+            if hasattr(clip,'model') and hasattr(clip.model,'token_embedding'):
+                tensor = torch.tensor(arr,dtype=torch.int,device=devices.device)
+                tokens = clip.model.token_embedding.wrapped(tensor).to(devices.device)
+            else:
+                token_embedding = clip.transformer.text_model.embeddings.token_embedding
+                tensor = torch.tensor(arr,dtype=torch.int,device=token_embedding.wrapped.weight.device)
+                tokens = token_embedding.wrapped(tensor).to(devices.device)
+            opts.CLIP_stop_at_last_layers = old
+            return tokens
+        except:
+            opts.CLIP_stop_at_last_layers = old
+            traceback.print_exc()
+            return None
+
     def to_float(num):
         if num is None: 
             return None
         try:
             return float(num)
+        except:
+            return None
+
+    def to_int(num):
+        if num is None: 
+            return None
+        try:
+            return int(num)
         except:
             return None
 
@@ -427,9 +468,22 @@ A cat is chasing a dog. <''-'road'-'grass'>
             return None
 
     reg_clean = re.compile(r'\s+')
-    reg_oper = re.compile(r'(=?)(?:([*/])([+-]?[0-9]*(?:\.[0-9]*)?)|:([+-]?)(-?[0-9]+))')
+    reg_oper = re.compile(r'(=?)(?:([*/,])([+-]?[0-9]*(?:\.[0-9]*)?)|:([+-]?)(-?[0-9]+))')
 
     def merge_parser(text,only_count):
+        clip = shared.sd_model.cond_stage_model.wrapped
+        vocab = None
+        def check_vocab(token):
+            nonlocal vocab
+            if vocab is None:
+                if isinstance(clip, FrozenCLIPEmbedder):
+                    vocab = clip.tokenizer.get_vocab()
+                elif isinstance(clip, FrozenOpenCLIPEmbedder):
+                    vocab = open_clip.tokenizer._tokenizer.encoder
+                else:
+                    return True
+                vocab = {v: k for k, v in vocab.items()}
+            return token in vocab
         orig = '"'+text+'"'
         text = text.replace('\0',' ')+' '
         length = len(text)
@@ -461,15 +515,22 @@ A cat is chasing a dog. <''-'road'-'grass'>
             arr.pop()
         
         actions = []
+        combine = False
         for param, quot in arr:
             one = param
             if quot:
-                actions.append({
-                  'A': None,
-                  'V': param,
-                  'O': one,
-                })
+                if combine:
+                    actions[-1]['V'] = param
+                    combine = False
+                else:
+                    actions.append({
+                      'A': None,
+                      'V': param,
+                      'O': one,
+                    })
                 continue
+            elif combine:
+                return (None,'Wrong concatenation "'+param+'" in '+orig)
             param = reg_clean.sub('',param)
             while param!='':
                 m = reg_oper.match(param)
@@ -487,11 +548,37 @@ A cat is chasing a dog. <''-'road'-'grass'>
                 m_val = m.group(3)
                 m_shift = m.group(4)
                 m_size = m.group(5)
+                m_tok = -1
                 if m_val is not None:
-                    m_val = to_float(m_val)
-                    if m_val is None:
-                        return (None,'Bad param for multiplication "'+param+'" in '+orig)
-                    m_mul = m_mul=='*'
+                    if m_mul==',':
+                        if m_flag:
+                            return (None,'Concatenation doesn\'t support \'=\' prefix: "'+param+'" in '+orig)
+                        if (len(m_val)>0) and (m_val[0]=='0'):
+                            if m_val=='0':
+                                m_tok = 0
+                            elif m_val=='00':
+                                m_tok = -2
+                            elif m_val=='000':
+                                m_tok = -3
+                            elif m_val=='0000':
+                                m_tok = -4
+                            else:
+                                m_tok = None
+                        elif m_val=='':
+                            m_tok = -5
+                            combine = True
+                            m_val = None
+                        else:
+                            m_tok = to_int(m_val)
+                            if (m_tok is not None) and not (m_tok>=0):
+                                m_tok = None
+                        if m_tok is None:
+                            return (None,'Bad param for concatenation "'+param+'" in '+orig)
+                    else:
+                        m_val = to_float(m_val)
+                        if m_val is None:
+                            return (None,'Bad param for multiplication "'+param+'" in '+orig)
+                        m_mul = m_mul=='*'
                     m_size = -1
                     m_shift = 0
                 else:
@@ -513,9 +600,12 @@ A cat is chasing a dog. <''-'road'-'grass'>
                   'S': m_size,
                   'R': m_shift,
                   'F': m_flag,
+                  'T': m_tok,
                   'O': one,
                 })
                 param = param[len(m.group(0)):]
+        if combine:
+            return (None,'Unfinished concatenation in '+orig)
         actions.append({
           'A': None,
           'V': None,
@@ -603,11 +693,37 @@ A cat is chasing a dog. <''-'road'-'grass'>
             else:
                 s = act['S']
                 r = act['R']
+                t = act['T']
                 if only_count:
-                    if (r==0)and(s>=0):
+                    if t!=-1:
+                        right += 1
+                    elif (r==0)and(s>=0):
                         right = s
                 else:
-                    if r!=0:
+                    if t!=-1:
+                        if t<0:
+                            if t==-2:
+                                t = shared.sd_model.cond_stage_model.id_pad
+                            elif t==-3:
+                                t = shared.sd_model.cond_stage_model.id_end
+                            elif t==-4:
+                                t = shared.sd_model.cond_stage_model.id_start
+                            else:
+                                res = grab_vectors(act['V'])
+                                t = None
+                                if res is None:
+                                    return (None,'Failed to parse \''+act['V']+'\' in '+orig)
+                        if t is not None:
+                            if not check_vocab(t):
+                                return (None,'Unknown token value \''+str(t)+'\' in '+orig)
+                            res = tokens_to_vectors([t])
+                        if res is None:
+                            return (None,'Failed to convert token \''+str(t)+'\' in '+orig)
+                        if right is None:
+                            right = res
+                        else:
+                            right = torch.cat([right,res])
+                    elif r!=0:
                         right = right.roll(r,dims=0)
                     else:
                         if s>=0:
@@ -716,6 +832,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
     
     def parse_infotext(text):
         orig = text
+        text += '\n'
         pos = re.search(r"\bEmbeddingMerge:\s*(\"?[<{])'EM_",text)
         if pos is None:
             return (None,orig)
@@ -830,7 +947,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
                 if err is not None:
                     txt = '<b style="'+font+'">'+html.escape(err)+'</b>'
                 else:
-                    txt = table+'<tr><th>Index</th><th>Min</th><th>Max</th><th>Sum</th><th>Abs</th><th>Len</th>'
+                    txt = table+'<tr><th>Index</th><th>Min</th><th>Max</th><th>Sum</th><th>Abs</th><th>Len</th><th>Std</th>'
                     i = 1
                     for one in res:
                         txt += '<tr><td>{}</td>{}</tr>'.format(i,tensor_info(one))
@@ -891,7 +1008,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
                         index += length
                     txt += '</table>'
                 return ('<center>'+txt+'</center>',gr_name,gr_orig)
-            txt = table+'<tr><th>Index</th><th>Vectors</th><th>Text</th><th>Token</th><th>Min</th><th>Max</th><th>Sum</th><th>Abs</th><th>Len</th></tr>'
+            txt = table+'<tr><th>Index</th><th>Vectors</th><th>Text</th><th>Token</th><th>Min</th><th>Max</th><th>Sum</th><th>Abs</th><th>Len</th><th>Std</th></tr>'
             index = 1
             join = False
             if gr_radio==by_words:
@@ -990,7 +1107,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
             return ('<center>'+txt+'</center>',need_save_embed(store,gr_name,res),gr_orig)
 
     def tensor_info(tensor):
-        return '<td>{:>-14.8f}</td><td>{:>+14.8f}</td><td>{:>+14.8f}</td><td>{:>14.8f}</td><td>{:>14.8f}</td>'.format(tensor.min().item(),tensor.max().item(),tensor.sum().item(),tensor.abs().sum().item(),torch.linalg.norm(tensor,ord=2)).replace(' ','&nbsp;')
+        return '<td>{:>-14.8f}</td><td>{:>+14.8f}</td><td>{:>+14.8f}</td><td>{:>14.8f}</td><td>{:>14.8f}</td><td>{:>14.8f}</td>'.format(tensor.min().item(),tensor.max().item(),tensor.sum().item(),tensor.abs().sum().item(),torch.linalg.norm(tensor,ord=2),tensor.std()).replace(' ','&nbsp;')
 
     merge_dir = None
     
@@ -1208,6 +1325,8 @@ class EmbeddingMergeExtension(scripts.Script):
     def process(self,p):
         if hasattr(_webui_embedding_merge_,'embedding_merge_extension'):
             getattr(_webui_embedding_merge_,'embedding_merge_extension')(p)
+
+
 
 script_callbacks.on_ui_tabs(_webui_embedding_merge_())
 script_callbacks.on_infotext_pasted(_webui_embedding_merge_.on_infotext_pasted)
