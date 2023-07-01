@@ -8,6 +8,7 @@ WebUI Dependencies:
 2) Object <modules.sd_hijack.model_hijack.embedding_db> is abused to create ephemeral embeddings.
      Work with fields <.word_embeddings> and <.ids_lookup> is replicated from
      </modules/textual_inversion/textual_inversion.py>, refer to register_embedding() here.
+     UPD: not needed anymore, since upstream implemented register_embedding_by_name()
 3) Saving of embedding is done by calling <modules.textual_inversion.textual_inversion.create_embedding(name, num_vectors_per_token, overwrite_old, init_text='*')>
      and then editing .pt file, plus <modules.sd_hijack.model_hijack.embedding_db.load_textual_inversion_embeddings()>
      also <modules.sd_hijack.model_hijack.embedding_db.add_embedding_dir(path)> is used.
@@ -751,9 +752,11 @@ A cat is chasing a dog. <''-'road'-'grass'>
         return cache
         
     def register_embedding(name,embedding):
-        # /modules/textual_inversion/textual_inversion.py
         self = modules.sd_hijack.model_hijack.embedding_db
         model = shared.sd_model
+        if hasattr(self,'register_embedding_by_name'):
+            return self.register_embedding_by_name(embedding,model,name)
+        # /modules/textual_inversion/textual_inversion.py
         try:
             ids = model.cond_stage_model.tokenize([name])[0]
             first_id = ids[0]
@@ -793,7 +796,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
         embed.filename = ''
         register_embedding(name,embed)
     
-    def reset_temp_embeddings(prod):
+    def reset_temp_embeddings(prod,unregister):
         cache = grab_embedding_cache()
         num = cache[prod]
         cache[prod] = 0
@@ -808,6 +811,8 @@ A cat is chasing a dog. <''-'road'-'grass'>
                     embed.vectors = 0
                     embed.cached_checksum = None
                     del cache[tgt]
+                    if unregister:
+                        register_embedding(tgt,None)
                 i = i-1
         return cache
 
@@ -928,7 +933,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
         with gr_lock:
             gr_orig = gr_text
             font = 'font-family:Consolas,Courier New,Courier,monospace;'
-            table = '<style>.webui_embedding_merge_table,.webui_embedding_merge_table td,.webui_embedding_merge_table th{border:1px solid gray;border-collapse:collapse}.webui_embedding_merge_table td,.webui_embedding_merge_table th{padding:2px 5px;text-align:center;vertical-align:middle;'+font+'font-weight:bold;}</style><table class="webui_embedding_merge_table">'
+            table = '<style>.webui_embedding_merge_table,.webui_embedding_merge_table td,.webui_embedding_merge_table th{border:1px solid gray;border-collapse:collapse}.webui_embedding_merge_table td,.webui_embedding_merge_table th{padding:2px 5px !important;text-align:center !important;vertical-align:middle;'+font+'font-weight:bold;}</style><table class="webui_embedding_merge_table">'
             (reparse,request) = parse_infotext(gr_text)
             if reparse is not None:
                 reparse = parse_mergeseq(reparse)
@@ -957,7 +962,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
                     txt += '</table>'
                 return ('<center>'+txt+'</center>',need_save_embed(store,gr_name,res),gr_orig)
             if gr_text.find("<'")>=0 or gr_text.find("{'")>=0:
-                cache = reset_temp_embeddings('-')
+                cache = reset_temp_embeddings('-',False)
                 used = {}
                 (res,err) = merge_one_prompt(cache,None,{},used,gr_text,False,False)
                 if err is not None:
@@ -1062,10 +1067,12 @@ A cat is chasing a dog. <''-'road'-'grass'>
                             span = ' rowspan="'+str(len(split))+'"'
                         else:
                             span = ''
-                head = '<td'+span+'>'+(str(index) if size==1 else str(index)+'-'+str(index+size-1))+'</td><td'+span+'>'+str(size)+'</td>'
+                if gr_radio==by_vectors:
+                    head = '<td'+span+'>'+str(size)+'</td>'
+                else:
+                    head = '<td'+span+'>'+(str(index) if size==1 else str(index)+'-'+str(index+size-1))+'</td><td'+span+'>'+str(size)+'</td>'
                 if split is None:
                     head += '<td'+span+'>'+html.escape('"'+name+'"')+'</td>'
-                index += size
                 if (gr_radio==by_vectors) or ((gr_radio==by_tokens) and (tokens is not None)):
                     i = 0
                     part = 0
@@ -1074,6 +1081,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
                     column = ''
                     toks = None
                     for one in list(tensor):
+                        index += 1
                         i += 1
                         use = one
                         if split is not None:
@@ -1097,11 +1105,12 @@ A cat is chasing a dog. <''-'road'-'grass'>
                             tok = toks if tokens else '*'
                         else:
                             tok = tokens[i-1] if tokens else '*_'+str(i)
-                        txt += '<tr>{}{}<td>{}</td>{}</tr>'.format(head,column,tok,tensor_info(use))
+                        txt += '<tr>{}{}<td>{}</td>{}</tr>'.format(('<td>'+str(index-1)+'</td>' if gr_radio==by_vectors else '')+head,column,tok,tensor_info(use))
                         column = ''
                         head = ''
                         ten = None
                 else:
+                    index += size   
                     txt += '<tr>{}<td>{}</td>{}</tr>'.format(head,', '.join([str(t) for t in tokens]) if tokens else '*',tensor_info(tensor))
             txt += '</table>'
             return ('<center>'+txt+'</center>',need_save_embed(store,gr_name,res),gr_orig)
@@ -1137,7 +1146,8 @@ A cat is chasing a dog. <''-'road'-'grass'>
         try:
             nonlocal merge_dir
             merge_dir = os.path.join(cmd_opts.embeddings_dir,'embedding_merge')
-            modules.sd_hijack.model_hijack.embedding_db.add_embedding_dir(merge_dir)
+            # don't actually need this, since it is a subfolder which will be read recursively:
+            #modules.sd_hijack.model_hijack.embedding_db.add_embedding_dir(merge_dir)
             os.makedirs(merge_dir)
         except:
             pass
@@ -1208,7 +1218,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
             return (None,'Fatal error?')
 
     def embedding_merge_extension(p):
-        cache = reset_temp_embeddings('_')
+        cache = reset_temp_embeddings('_',False)
         texts = {}
         parts = {}
         used = {}
@@ -1293,9 +1303,9 @@ A cat is chasing a dog. <''-'road'-'grass'>
     setattr(_webui_embedding_merge_,'on_infotext_pasted',on_infotext_pasted)
     
     def on_script_unloaded():
-        reset_temp_embeddings('_')
-        reset_temp_embeddings('-')
-        reset_temp_embeddings('/')
+        reset_temp_embeddings('_',True)
+        reset_temp_embeddings('-',True)
+        reset_temp_embeddings('/',True)
         try:
             cls = modules.sd_hijack.StableDiffusionModelHijack
             get_prompt_lengths = cls.get_prompt_lengths
@@ -1312,7 +1322,6 @@ A cat is chasing a dog. <''-'road'-'grass'>
         except:
             traceback.print_exc()
     setattr(_webui_embedding_merge_,'on_script_unloaded',on_script_unloaded)
-    
     setattr(_webui_embedding_merge_,'embedding_merge_extension',embedding_merge_extension)
     embedding_merge_dir()
     return gr_tab
