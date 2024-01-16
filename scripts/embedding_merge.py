@@ -7,21 +7,22 @@ WebUI Dependencies:
      required fields: <.vec> = actual tensor, <.vectors> = first dim size, <.shape> = last dim size.
 2) Object <modules.sd_hijack.model_hijack.embedding_db> is abused to create ephemeral embeddings.
      Work with fields <.word_embeddings> and <.ids_lookup> is replicated from
-     </modules/textual_inversion/textual_inversion.py>, refer to register_embedding() here.
-     UPD: not needed anymore, since upstream implemented register_embedding_by_name()
+     </modules/textual_inversion/textual_inversion.py>, refer to <register_embedding()> here.
+     UPD: not needed anymore, since upstream implemented <register_embedding_by_name()>
 3) Saving of embedding is done by calling <modules.textual_inversion.textual_inversion.create_embedding(name, num_vectors_per_token, overwrite_old, init_text='*')>
      and then editing .pt file, plus <modules.sd_hijack.model_hijack.embedding_db.load_textual_inversion_embeddings()>
      also <modules.sd_hijack.model_hijack.embedding_db.add_embedding_dir(path)> is used.
 4) <modules.sd_hijack.StableDiffusionModelHijack.get_prompt_lengths(text)> is hooked but not replaced.
-5) Part of encode_embedding_init_text() from sd_hijack_clip.py and sd_hijack_open_clip.py is converted to
-     tokens_to_vectors() here; it uses shared.sd_model.cond_stage_model.wrapped and then call either
-     .model.token_embedding.wrapped() for SD2, or .transformer.text_model.embeddings.token_embedding.wrapped() for SD1
+5) Part of <encode_embedding_init_text()> from <sd_hijack_clip.py> and <sd_hijack_open_clip.py> is converted to
+     <tokens_to_vectors()> here; it uses <shared.sd_model.cond_stage_model.wrapped> and then calls either
+     <.model.token_embedding.wrapped()> for SD2, or <.transformer.text_model.embeddings.token_embedding.wrapped()> for SD1
 6) Code from <https://github.com/AUTOMATIC1111/stable-diffusion-webui-tokenizer> is heavily copied:
      it grabs <shared.sd_model.cond_stage_model.wrapped> and checks it against
-     <FrozenCLIPEmbedder> and <FrozenOpenCLIPEmbedder>, refer to tokens_to_text() here.
+     <FrozenCLIPEmbedder> and <FrozenOpenCLIPEmbedder>, refer to <tokens_to_text()> here.
 7) <shared.sd_model.cond_stage_model.tokenize_line(line)> is called many times when parsing prompts.
      The code is very dependent on what it returns! Source in </modules/sd_hijack_clip.py>
      Also <shared.sd_model.cond_stage_model.tokenize()> can be called.
+8) Method <p.cached_params()> is faked to be always unique if any runtime embeddings are detected to prevent wrong caching.
 '''
 
 import re
@@ -29,6 +30,8 @@ import os
 import torch
 import json
 import html
+import time
+import types
 import traceback
 import threading
 import gradio
@@ -1217,47 +1220,71 @@ A cat is chasing a dog. <''-'road'-'grass'>
             traceback.print_exc()
             return (None,'Fatal error?')
 
+    fake_cached_params_counter = time.time()
+    def fake_cached_params(self,*ar,**kw):
+        nonlocal fake_cached_params_counter
+        fake_cached_params_counter += 1
+        return (*(self.em_orig_cached_params(*ar,**kw)),id(_webui_embedding_merge_),fake_cached_params_counter)
+
     def embedding_merge_extension(p):
         cache = reset_temp_embeddings('_',False)
         texts = {}
         parts = {}
         used = {}
-        pair = [[
+        use_hr = hasattr(p,'hr_prompt')
+        arr = [
             p.all_prompts,
             p.prompt if type(p.prompt)==list else [p.prompt],
-        ],[
             p.all_negative_prompts,
             p.negative_prompt if type(p.negative_prompt)==list else [p.negative_prompt],
-        ]]
-        for arr in pair:
+        ]
+        if use_hr:
+            arr += [
+                p.all_hr_prompts,
+                p.hr_prompt if type(p.hr_prompt)==list else [p.hr_prompt],
+                p.all_hr_negative_prompts,
+                p.hr_negative_prompt if type(p.hr_negative_prompt)==list else [p.hr_negative_prompt],
+            ]
+        for one in arr:
             ok = False
             fail = None
-            for one in arr:
-                if one is not None:
-                    for i in range(len(one)):
-                        (res,err) = merge_one_prompt(cache,texts,parts,used,one[i],True,False)
-                        if err is not None:
-                            if fail is None:
-                                fail = err
-                        else:
-                            one[i] = res
-                            ok = True
+            if one is not None:
+                for i in range(len(one)):
+                    (res,err) = merge_one_prompt(cache,texts,parts,used,one[i],True,False)
+                    if err is not None:
+                        if fail is None:
+                            fail = err
+                    else:
+                        one[i] = res
+                        ok = True
             if not ok and fail is not None:
                 raise_sd_error(p,'\n\nEmbedding Merge failed - '+err+'\n')
                 return
-        arr = pair[0]+pair[1]
         p.all_prompts = arr[0]
         p.all_negative_prompts = arr[2]
         p.prompt = arr[1] if type(p.prompt)==list else arr[1][0]
         p.negative_prompt = arr[3] if type(p.negative_prompt)==list else arr[3][0]
+        if use_hr:
+            p.all_hr_prompts = arr[4]
+            p.all_hr_negative_prompts = arr[6]
+            p.hr_prompt = arr[5] if type(p.hr_prompt)==list else arr[5][0]
+            p.hr_negative_prompt = arr[7] if type(p.hr_negative_prompt)==list else arr[7][0]
         gen = ''
+        was_used = False
         for embed in used:
-            if embed[0]=='<':
-                gen += embed+'=<'+used[embed]+'>, '
-            else:
-                gen += embed+'={'+used[embed]+'}, '
+            was_used = True
+            if embed!='':
+                if embed[0]=='<':
+                    gen += embed+'=<'+used[embed]+'>, '
+                else:
+                    gen += embed+'={'+used[embed]+'}, '
         if gen!='':
             p.extra_generation_params['EmbeddingMerge'] = gen[:-2]
+        if was_used:
+            orig = getattr(p,'cached_params',None)
+            if orig is not None:
+                setattr(p,'em_orig_cached_params',orig)
+                setattr(p,'cached_params',types.MethodType(fake_cached_params,p))
 
     try:
         cls = modules.sd_hijack.StableDiffusionModelHijack
