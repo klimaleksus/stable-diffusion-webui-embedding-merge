@@ -1227,6 +1227,8 @@ A cat is chasing a dog. <''-'road'-'grass'>
         return (*(self.em_orig_cached_params(*ar,**kw)),id(_webui_embedding_merge_),fake_cached_params_counter)
 
     def embedding_merge_extension(p):
+        if 'EmbeddingMerge' in p.extra_generation_params:
+            return
         cache = reset_temp_embeddings('_',False)
         texts = {}
         parts = {}
