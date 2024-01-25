@@ -56,7 +56,8 @@ Also use `<'your words'*0.5>` (or any number, default is 1.0) to increase or dec
 To use attention with round brackets ( ), put them around < >, like `(<'one'+'two'>:0.9)`  
 Use as many <> in one prompt, as you want; also you can put your existing TI embedding names inside `' '`.
 
-When you need literal <' for some reason, put a space between.  
+~~When you need literal <' for some reason, put a space between.~~ You cannot have literal <' anywhere in your prompts; but with a space between (`< '`) it will be ignored by this extension.  
+
 If some other extension interferes with this syntax, change angular brackets to curly: `{'also works'*4}`
 
 ## View text or embeddings vectors
@@ -166,7 +167,7 @@ Combining different subjects or styles together, resulting in joined concepts:
 Art by <'greg rutkowski'*X+'hayao miyazaki'*Y> style.
 
 Notes:
-- Works best when all of your subjects have the same number of vectors (then can be even simulated by BREAK statement: `… photo of the girl in rainbow … BREAK … photo of the doll in rainbow …`);
+- Works best when all of your subjects have the same number of vectors (also can be roughly simulated by BREAK statement: `… photo of the girl in rainbow … BREAK … photo of the doll in rainbow …`);
 - You don't have to divide on the number of added parts, especially if your subjects are very different (e.g. not contain same tokens);
 - By multiplying each part in second example (where X and Y are numbers between 0.0 and 1.0) you may get a weighed combination or interpolation.
 
@@ -191,6 +192,10 @@ You can actually put merge expressions in angular or curly brackets into your tx
 > a photo of <'EM_1'>  
 Negative prompt: {'EM_2'}  
 Steps: 8, Sampler: DPM++ 2M Karras, CFG scale: 7, Seed: 1374372309, Size: 512x512, Model hash: c6bbc15e32, Model: sd-v1-5-inpainting, EmbeddingMerge: "<'EM_1'>=<'sky' * 2/4 + 'forest' * 3/4>, {'EM_2'}={'blurry'+'cropped'}", Conditional mask weight: 1
+
+For your information replicating start tokens of the syntax itself:
+- `<'` = `<'',27,6>` or `<'',27,262>`
+- `{'` = `<'',90,6>` or `<'',90,262>`
 
 ### What is not working:
 
