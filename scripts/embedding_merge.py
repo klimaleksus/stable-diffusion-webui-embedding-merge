@@ -86,7 +86,8 @@ Also use `<'your words'*0.5>` (or any number, default is 1.0) to increase or dec
 To use attention with round brackets ( ), put them around < >, like `(<'one'+'two'>:0.9)`  
 Use as many <> in one prompt, as you want; also you can put your existing TI embedding names inside `' '`.
 
-When you need literal <' for some reason, put a space between.  
+~~When you need literal <' for some reason, put a space between.~~ You cannot have literal <' anywhere in your prompts; but with a space between (`< '`) it will be ignored by this extension.  
+
 If some other extension interferes with this syntax, change angular brackets to curly: `{'also works'*4}`
 
 ## View text or embeddings vectors
@@ -205,7 +206,7 @@ Combining different subjects or styles together, resulting in joined concepts:
 Art by <'greg rutkowski'*X+'hayao miyazaki'*Y> style.
 
 Notes:
-- Works best when all of your subjects have the same number of vectors (then can be even simulated by BREAK statement: `… photo of the girl in rainbow … BREAK … photo of the doll in rainbow …`);
+- Works best when all of your subjects have the same number of vectors (also can be roughly simulated by BREAK statement: `… photo of the girl in rainbow … BREAK … photo of the doll in rainbow …`);
 - You don't have to divide on the number of added parts, especially if your subjects are very different (e.g. not contain same tokens);
 - By multiplying each part in second example (where X and Y are numbers between 0.0 and 1.0) you may get a weighed combination or interpolation.
 
@@ -231,6 +232,11 @@ You can actually put merge expressions in angular or curly brackets into your tx
 > a photo of <'EM_1'>  
 Negative prompt: {'EM_2'}  
 Steps: 8, Sampler: DPM++ 2M Karras, CFG scale: 7, Seed: 1374372309, Size: 512x512, Model hash: c6bbc15e32, Model: sd-v1-5-inpainting, EmbeddingMerge: "<'EM_1'>=<'sky' * 2/4 + 'forest' * 3/4>, {'EM_2'}={'blurry'+'cropped'}", Conditional mask weight: 1
+
+For your information replicating start tokens of the syntax itself:
+- `<'` = `<'',27,6>` or `<'',27,262>`
+- `{'` = `<'',90,6>` or `<'',90,262>`
+
 ''')
                     with gradio.Accordion('Limitations...', open=False):
                         gradio.Markdown('''
@@ -809,8 +815,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
                 tgt = a+"'EM"+prod+str(i)+"'"+b
                 if tgt in cache:
                     embed = cache[tgt]
-                    embed.vec = None
-                    embed.shape = None
+                    embed.vec = torch.zeros((0,embed.vec.shape[-1]),device=embed.vec.device)
                     embed.vectors = 0
                     embed.cached_checksum = None
                     del cache[tgt]
@@ -1161,6 +1166,8 @@ A cat is chasing a dog. <''-'road'-'grass'>
                 raise Exception_From_EmbeddingMergeExtension(msg)
         p.__class__ = Exception_From_EmbeddingMergeExtension_
 
+    em_regexp = re.compile(r"<'EM[_/-]\d+'>|{'EM[_/-]\d+'}")
+    
     def merge_one_prompt(cache,texts,parts,used,prompt,prod,only_count):
         try:
             cnt = 0
@@ -1183,6 +1190,10 @@ A cat is chasing a dog. <''-'road'-'grass'>
                     if texts is not None:
                         texts[orig] = prompt
                     return (prompt,None)
+                eph = em_regexp.match(prompt[left:])
+                if eph is not None:
+                    left += len(eph.group(0))
+                    continue
                 right = left
                 while True:
                     right = prompt.find('}' if curly else '>',right+1)
@@ -1225,14 +1236,11 @@ A cat is chasing a dog. <''-'road'-'grass'>
         nonlocal fake_cached_params_counter
         fake_cached_params_counter += 1
         return (*(self.em_orig_cached_params(*ar,**kw)),id(_webui_embedding_merge_),fake_cached_params_counter)
+    
+    cached_state = None
 
     def embedding_merge_extension(p):
-        if 'EmbeddingMerge' in p.extra_generation_params:
-            return
-        cache = reset_temp_embeddings('_',False)
-        texts = {}
-        parts = {}
-        used = {}
+        nonlocal cached_state
         use_hr = hasattr(p,'hr_prompt')
         arr = [
             p.all_prompts,
@@ -1247,6 +1255,23 @@ A cat is chasing a dog. <''-'road'-'grass'>
                 p.all_hr_negative_prompts,
                 p.hr_negative_prompt if type(p.hr_negative_prompt)==list else [p.hr_negative_prompt],
             ]
+        restart = True
+        if 'EmbeddingMerge' in p.extra_generation_params:
+            restart = False
+        elif em_regexp.search(' '.join([' '.join(one) for one in arr if one is not None])) is not None:
+            restart = False
+            print("[EmbeddingMerge] WARNING: ephemeral embeddings (like <'EM_1'>) are detected!")
+        if restart or (cached_state is None):
+            cached_state = {
+                'cache': reset_temp_embeddings('_',False),
+                'texts': {},
+                'parts': {},
+                'used': {},
+            }
+        cache = cached_state['cache']
+        texts = cached_state['texts']
+        parts = cached_state['parts']
+        used = cached_state['used']
         for one in arr:
             ok = False
             fail = None
@@ -1329,6 +1354,10 @@ A cat is chasing a dog. <''-'road'-'grass'>
                 result['Prompt'] = dict_replace(reparse,result['Prompt'])
             if 'Negative prompt' in result:
                 result['Negative prompt'] = dict_replace(reparse,result['Negative prompt'])
+            if 'Hires prompt' in result:
+                result['Hires prompt'] = dict_replace(reparse,result['Hires prompt'])
+            if 'Hires negative prompt' in result:
+                result['Hires negative prompt'] = dict_replace(reparse,result['Hires negative prompt'])
     setattr(_webui_embedding_merge_,'on_infotext_pasted',on_infotext_pasted)
     
     def on_script_unloaded():
