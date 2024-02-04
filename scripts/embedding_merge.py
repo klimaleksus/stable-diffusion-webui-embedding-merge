@@ -303,13 +303,14 @@ A cat is chasing a dog. <''-'road'-'grass'>
                     return self.tokenizer.encoder
                 def byte_decoder(self):
                     return self.tokenizer.byte_decoder
-            clip = shared.sd_model.cond_stage_model.wrapped
-            if isinstance(clip, FrozenCLIPEmbedder):
-                clip = VanillaClip(shared.sd_model.cond_stage_model.wrapped)
-            elif isinstance(clip, FrozenOpenCLIPEmbedder):
-                clip = OpenClip(shared.sd_model.cond_stage_model.wrapped)
+            clip = shared.sd_model.cond_stage_model
+            if hasattr(clip,'embedders'):
+                clip = clip.embedders[0]
+            clip = clip.wrapped
+            if isinstance(clip, FrozenOpenCLIPEmbedder):
+                clip = OpenClip(clip)
             else:
-                return None
+                clip = VanillaClip(clip)
             vocab = {v: k for k, v in clip.vocab().items()}
             byte_decoder = clip.byte_decoder()
             def _tokens_to_text(tokens):
@@ -367,93 +368,105 @@ A cat is chasing a dog. <''-'road'-'grass'>
                 pass
         return (clip,) # SD1 or SD2
 
-    def text_to_vectors(text):
-        dv = None
-        dt = None
+    def text_to_vectors(orig_text):
         try:
-            res = []
-            text = text.lstrip().lower()
-            clip = shared.sd_model.cond_stage_model
-            tokens = clip.tokenize_line(str_to_escape(text))
-            count = tokens[1]
-            tokens = tokens[0][0]
-            fixes = tokens.fixes
-            if count>=len(tokens.tokens):
-                return None
-            tokens = tokens.tokens[1:count+1]
-            start = 0
-            for fix in fixes:
-                name = fix.embedding.name.lower()
-                tensor = fix.embedding.vec
-                num = fix.embedding.vectors
-                off = fix.offset
-                if num!=tensor.size(0):
+            both = []
+            for clip,lg in zip(get_model_clips(),('clip_l','clip_g')):
+                res = []
+                text = orig_text.lstrip().lower()
+                tokens = clip.tokenize_line(str_to_escape(text))
+                count = tokens[1]
+                tokens = tokens[0][0]
+                fixes = tokens.fixes
+                if count>=len(tokens.tokens):
                     return None
-                lenname = len(name)
-                if off!=start:
-                    test = 0
-                    while True:
-                        pos = text.find(name,test)
-                        if pos<0:
-                            return None
-                        test = pos+lenname
-                        sub = text[0:test]
-                        part = clip.tokenize_line(str_to_escape(sub))
-                        cnt = part[1]
-                        part = part[0][0]
-                        vec = off-start
-                        need = tokens[start:off+num]
-                        if part.tokens[1:cnt+1]==need:
-                            trans = clip.encode_embedding_init_text(text,vec)
-                            t = trans[:vec].to(device=devices.device,dtype=torch.float32)
-                            res.append((t,sub[:pos],need[:vec]))
-                            text = text[pos:]
-                            start = off
-                            break
-                if text[0:lenname]!=name:
-                    return None
-                tensor = tensor.to(device=devices.device,dtype=torch.float32)
-                res.append((tensor,name,None))
-                start += num
-                text = text[lenname:].lstrip()
-            if text!='':
-                part = clip.tokenize_line(str_to_escape(text))
-                cnt = part[1]
-                part = part[0][0]
-                need = tokens[start:]
-                if part.tokens[1:cnt+1]!=need:
-                    return None
-                trans = clip.encode_embedding_init_text(text,999)
-                trans = trans.to(device=devices.device,dtype=torch.float32)
-                res.append((trans,text,need))
-            return res
+                tokens = tokens.tokens[1:count+1]
+                start = 0
+                for fix in fixes:
+                    name = fix.embedding.name.lower()
+                    tensor = fix.embedding.vec
+                    if type(tensor)==dict:
+                        tensor = tensor[lg]
+                    num = fix.embedding.vectors
+                    off = fix.offset
+                    if num!=tensor.size(0):
+                        return None
+                    lenname = len(name)
+                    if off!=start:
+                        test = 0
+                        while True:
+                            pos = text.find(name,test)
+                            if pos<0:
+                                return None
+                            test = pos+lenname
+                            sub = text[0:test]
+                            part = clip.tokenize_line(str_to_escape(sub))
+                            cnt = part[1]
+                            part = part[0][0]
+                            vec = off-start
+                            need = tokens[start:off+num]
+                            if part.tokens[1:cnt+1]==need:
+                                trans = clip.encode_embedding_init_text(text,vec)
+                                t = trans[:vec].to(device=devices.device,dtype=torch.float32)
+                                res.append((t,sub[:pos],need[:vec]))
+                                text = text[pos:]
+                                start = off
+                                break
+                    if text[0:lenname]!=name:
+                        return None
+                    tensor = tensor.to(device=devices.device,dtype=torch.float32)
+                    res.append((tensor,name,None))
+                    start += num
+                    text = text[lenname:].lstrip()
+                if text!='':
+                    part = clip.tokenize_line(str_to_escape(text))
+                    cnt = part[1]
+                    part = part[0][0]
+                    need = tokens[start:]
+                    if part.tokens[1:cnt+1]!=need:
+                        return None
+                    trans = clip.encode_embedding_init_text(text,999)
+                    trans = trans.to(device=devices.device,dtype=torch.float32)
+                    res.append((trans,text,need))
+                both.append(res)
+            return both
         except:
             traceback.print_exc()
             return None
 
     def text_to_tokens(text):
         try:
-            tokens = shared.sd_model.cond_stage_model.tokenize([text])[0]
-            return tokens
+            both = []
+            for clip in get_model_clips():
+                tokens = clip.tokenize([text])[0]
+                both.append(tokens)
+            if len(both)>1:
+                if (both[0]-both[1]).abs().max().item() != 0:
+                    print('EM: text_to_tokens',both)
+                    return None
+            return both[0]
         except:
             return None
 
-    def tokens_to_vectors(arr):
-        old = opts.CLIP_stop_at_last_layers
-        opts.CLIP_stop_at_last_layers = 1
+    def tokens_to_vectors(pair):
         try:
-            clip = shared.sd_model.cond_stage_model.wrapped
-            if hasattr(clip,'model') and hasattr(clip.model,'token_embedding'):
-                tensor = torch.tensor(arr,dtype=torch.int,device=devices.device)
-                tokens = clip.model.token_embedding.wrapped(tensor).to(devices.device)
-            else:
-                token_embedding = clip.transformer.text_model.embeddings.token_embedding
-                tensor = torch.tensor(arr,dtype=torch.int,device=token_embedding.wrapped.weight.device)
-                tokens = token_embedding.wrapped(tensor).to(devices.device)
-            opts.CLIP_stop_at_last_layers = old
-            return tokens
+            res = []
+            for clip,arr in zip(get_model_clips(),pair):
+                clip = clip.wrapped
+                if hasattr(clip,'model') and hasattr(clip.model,'token_embedding'):
+                    tensor = torch.tensor([arr],dtype=torch.int,device=devices.device)
+                    tokens = clip.model.token_embedding.wrapped(tensor).to(devices.device)
+                else:
+                    token_embedding = clip.transformer.text_model.embeddings.token_embedding
+                    tensor = torch.tensor([arr],dtype=torch.int,device=token_embedding.wrapped.weight.device)
+                    tokens = token_embedding.wrapped(tensor).to(devices.device)
+                res.append(tokens)
+            if len(res)>1:
+                if len(res[0]) != len(res[1]):
+                    print('EM: tokens_to_vectors',res)
+                    return None
+            return res
         except:
-            opts.CLIP_stop_at_last_layers = old
             traceback.print_exc()
             return None
 
@@ -475,14 +488,20 @@ A cat is chasing a dog. <''-'road'-'grass'>
 
     def grab_vectors(text):
         try:
-            res = text_to_vectors(text)
-            if res is None:
-                return None
-            if len(res)==0:
-                res = text_to_vectors(',')[0][0][0:0]
-                return res
-            res = torch.cat([ten[0] for ten in res]);
-            return res
+            both = []
+            for res in text_to_vectors(text):
+                if res is None:
+                    return None
+                if len(res)==0:
+                    res = text_to_vectors(',')[len(both)][0][0][0:0]
+                else:
+                    res = torch.cat([ten[0] for ten in res]);
+                both.append(res)
+            if len(both)>1:
+                if len(both[0]) != len(both[1]):
+                    print('EM: grab_vectors',both)
+                    return None
+            return both
         except:
             return None
 
@@ -490,19 +509,27 @@ A cat is chasing a dog. <''-'road'-'grass'>
     reg_oper = re.compile(r'(=?)(?:([*/,])([+-]?[0-9]*(?:\.[0-9]*)?)|:([+-]?)(-?[0-9]+))')
 
     def merge_parser(text,only_count):
-        clip = shared.sd_model.cond_stage_model.wrapped
+        clips = get_model_clips()
         vocab = None
-        def check_vocab(token):
+        def check_vocab(token2):
             nonlocal vocab
             if vocab is None:
-                if isinstance(clip, FrozenCLIPEmbedder):
-                    vocab = clip.tokenizer.get_vocab()
-                elif isinstance(clip, FrozenOpenCLIPEmbedder):
-                    vocab = open_clip.tokenizer._tokenizer.encoder
-                else:
-                    return True
-                vocab = {v: k for k, v in vocab.items()}
-            return token in vocab
+                vocab = []
+                for clip in clips:
+                    wrapped = clip.wrapped
+                    if isinstance(wrapped, FrozenCLIPEmbedder):
+                        voc = wrapped.tokenizer.get_vocab()
+                    elif isinstance(wrapped, FrozenOpenCLIPEmbedder):
+                        voc = open_clip.tokenizer._tokenizer.encoder
+                    else:
+                        return True
+                vocab.append({v: k for k, v in voc.items()})
+            t = token2[0]
+            if len(vocab)>1:
+                if len(token2)>1:
+                    return (t in vocab[0]) and (token2[1] in vocab[1])
+                return (t in vocab[0]) and (t in vocab[1])
+            return t in vocab[0]
         orig = '"'+text+'"'
         text = text.replace('\0',' ')+' '
         length = len(text)
@@ -673,23 +700,35 @@ A cat is chasing a dog. <''-'road'-'grass'>
                         if left>right:
                             right = left
                     else:
-                        (vectors1,length1) = left.size()
-                        (vectors2,length2) = right.size()
-                        if length1!=length2:
+                        (vectors1_0,length1_0) = left[0].size()
+                        (vectors2_0,length2_0) = right[0].size()
+                        (vectors1_1,length1_1) = left[1].size() if len(left)>1 else (vectors1_0,length1_0)
+                        (vectors2_1,length2_1) = right[1].size() if len(right)>1 else (vectors2_0,length2_0)
+                        if (length1_0!=length2_0) or (length1_1!=length2_1) or (vectors1_0!=vectors1_1) or (vectors2_0!=vectors2_1) or (len(left)!=len(right)):
                             return (None,'Cannot merge different embeddings in '+orig)
-                        if vectors1!=vectors2:
-                            if vectors1<vectors2:
-                                target = torch.zeros(vectors2,length1).to(device=devices.device,dtype=torch.float32)
-                                target[0:vectors1] = left
+                        if vectors1_0!=vectors2_0:
+                            if vectors1_0<vectors2_0:
+                                target = [torch.zeros(vectors2_0,length1_0).to(device=devices.device,dtype=torch.float32)]
+                                target[0][0:vectors1_0] = left[0]
+                                if len(left)>1:
+                                    target.append(torch.zeros(vectors2_1,length1_1).to(device=devices.device,dtype=torch.float32))
+                                    target[1][0:vectors1_1] = left[1]
                                 left = target
                             else:
-                                target = torch.zeros(vectors1,length2).to(device=devices.device,dtype=torch.float32)
-                                target[0:vectors2] = right
+                                target = [torch.zeros(vectors1_0,length2_0).to(device=devices.device,dtype=torch.float32)]
+                                target[0][0:vectors2_0] = right[0]
+                                if len(right)>1:
+                                    target.append(torch.zeros(vectors1_1,length2_1).to(device=devices.device,dtype=torch.float32))
+                                    target[1][0:vectors2_1] = right[1]
                                 right = target
                         if add>0:
-                            right = left+right
+                            right[0] = left[0]+right[0]
+                            if len(left)>1 and len(right)>1:
+                                right[1] = left[1]+right[1]
                         else:
-                            right = left-right
+                            right[0] = left[0]-right[0]
+                            if len(left)>1 and len(right)>1:
+                                right[1] = left[1]-right[1]
                 left = None
             A = act['A']
             if A==None:
@@ -700,7 +739,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
                 if right==None:
                     return (None,'Failed to parse \''+line+'\' in '+orig)
                 if only_count:
-                    right = right.size(0)
+                    right = right[0].size(0)
             elif A==False:
                 if act['V']:
                     add = 1
@@ -721,41 +760,57 @@ A cat is chasing a dog. <''-'road'-'grass'>
                     if t!=-1:
                         if t<0:
                             if t==-2:
-                                t = shared.sd_model.cond_stage_model.id_pad
+                                t = [clip.id_pad for clip in clips]
                             elif t==-3:
-                                t = shared.sd_model.cond_stage_model.id_end
+                                t = [clip.id_end for clip in clips]
                             elif t==-4:
-                                t = shared.sd_model.cond_stage_model.id_start
+                                t = [clip.id_start for clip in clips]
                             else:
                                 res = grab_vectors(act['V'])
                                 t = None
                                 if res is None:
                                     return (None,'Failed to parse \''+act['V']+'\' in '+orig)
+                        else:
+                            if len(clips)>1:
+                                t = [t,t]
+                            else:
+                                t = [t]
                         if t is not None:
                             if not check_vocab(t):
-                                return (None,'Unknown token value \''+str(t)+'\' in '+orig)
-                            res = tokens_to_vectors([t])
+                                return (None,'Unknown token value \''+str(t[0])+'\' in '+orig)
+                            res = tokens_to_vectors(t)
                         if res is None:
                             return (None,'Failed to convert token \''+str(t)+'\' in '+orig)
                         if right is None:
                             right = res
                         else:
-                            right = torch.cat([right,res])
+                            if len(right)>1 and len(res)>1:
+                                right = [torch.cat([right[0],res[0]]),torch.cat([right[1],res[1]])]
+                            else:
+                                right = [torch.cat([right[0],res[0]])]
                     elif r!=0:
-                        right = right.roll(r,dims=0)
+                        right[0] = right[0].roll(r,dims=0)
+                        if len(right)>1:
+                            right[1] = right[1].roll(r,dims=0)
                     else:
                         if s>=0:
-                            (vectors,length) = right.size()
+                            (vectors,length) = right[0].size()
                             if vectors>s:
-                                right = right[0:s]
+                                if len(right)>1:
+                                    right = [right[0][0:s],right[1][0:s]]
+                                else:
+                                    right[0] = right[0][0:s]
                             elif vectors<s:
-                                target = torch.zeros(s,length).to(device=devices.device,dtype=torch.float32)
-                                target[0:vectors] = right
+                                target = [torch.zeros(s,length).to(device=devices.device,dtype=torch.float32)]
+                                target[0][0:vectors] = right[0]
+                                if len(right)>1:
+                                    target.append(torch.zeros(s,length).to(device=devices.device,dtype=torch.float32))
+                                    target[1][0:vectors] = right[1]
                                 right = target
                         elif act['W']==True:
-                            right = right*act['V']
+                            right = [r*act['V'] for r in right]
                         elif  act['W']==False:
-                            right = right/act['V']
+                            right = [r/act['V'] for r in right]
         return (right,None)
 
     def grab_embedding_cache():
@@ -795,18 +850,27 @@ A cat is chasing a dog. <''-'road'-'grass'>
         return embedding
 
     def make_temp_embedding(name,vectors,cache,fake):
+        embed = None
         if name in cache:
             embed = cache[name]
             if fake>0:
                 return
         else:
             if fake>0:
-                vectors = torch.zeros((fake,16))
+                if len(get_model_clips())>1:
+                    vectors = [torch.zeros((fake,16)),torch.zeros((fake,16))]
+                else:
+                    vectors = [torch.zeros((fake,16))]
+        shape = vectors[-1].size()
+        if len(vectors)>1:
+            vectors = {'clip_g':vectors[1],'clip_l':vectors[0]}
+        else:
+            vectors = vectors[0]
+        if embed is None:
             embed = Embedding(vectors,name)
             cache[name] = embed
         embed.vec = vectors
         embed.step = None
-        shape = vectors.size()
         embed.vectors = shape[0]
         embed.shape = shape[-1]
         embed.cached_checksum = None
@@ -823,7 +887,11 @@ A cat is chasing a dog. <''-'road'-'grass'>
                 tgt = a+"'EM"+prod+str(i)+"'"+b
                 if tgt in cache:
                     embed = cache[tgt]
-                    embed.vec = torch.zeros((0,embed.vec.shape[-1]),device=embed.vec.device)
+                    if type(embed.vec)==dict:
+                        for k,v in embed.vec.items():
+                            embed.vec[k] = torch.zeros((0,v.shape[-1]),device=v.device)
+                    else:
+                        embed.vec = torch.zeros((0,embed.vec.shape[-1]),device=embed.vec.device)
                     embed.vectors = 0
                     embed.cached_checksum = None
                     del cache[tgt]
@@ -949,10 +1017,9 @@ A cat is chasing a dog. <''-'road'-'grass'>
         with gr_lock:
             gr_orig = gr_text
             font = 'font-family:Consolas,Courier New,Courier,monospace;'
-            table = '<style>.webui_embedding_merge_table,.webui_embedding_merge_table td,.webui_embedding_merge_table th{border:1px solid gray;border-collapse:collapse}.webui_embedding_merge_table td,.webui_embedding_merge_table th{padding:2px 5px !important;text-align:center !important;vertical-align:middle;'+font+'font-weight:bold;}</style><table class="webui_embedding_merge_table">'
+            table = '<style>.webui_embedding_merge_table,.webui_embedding_merge_table td,.webui_embedding_merge_table th{border:1px solid gray;border-collapse:collapse}.webui_embedding_merge_table td,.webui_embedding_merge_table th{padding:2px 5px !important;text-align:center !important;vertical-align:middle;'+font+'font-weight:bold;}.webui_embedding_merge_table{margin:6px auto !important;}</style>'
             (reparse,request) = parse_infotext(gr_text)
             if reparse is not None:
-                print(reparse)
                 reparse = parse_mergeseq(reparse)
                 if reparse is None:
                     return ('<center><b>Prompt restore failed!</n></center>',gr_name,gr_orig)
@@ -960,32 +1027,37 @@ A cat is chasing a dog. <''-'road'-'grass'>
                     request = dict_replace(reparse,request)
                     return ('<center><b>Prompt restored.</n></center>',gr_name,request)
             if gr_text[:1]=="'":
-                clipskip = opts.CLIP_stop_at_last_layers
-                opts.CLIP_stop_at_last_layers = 1
-                (res,err) = merge_parser(gr_text,False)
-                opts.CLIP_stop_at_last_layers = clipskip
-                if (res is not None) and res.numel()==0:
+                (two,err) = merge_parser(gr_text,False)
+                if (two is not None) and two[0].numel()==0:
                     err = 'Result is ZERO vectors!'
                 if err is not None:
                     txt = '<b style="'+font+'">'+html.escape(err)+'</b>'
                 else:
-                    txt = table+'<tr><th>Index</th><th>Min</th><th>Max</th><th>Sum</th><th>Abs</th><th>Len</th><th>Std</th>'
-                    i = 1
-                    for one in res:
-                        txt += '<tr><td>{}</td>{}</tr>'.format(i,tensor_info(one))
-                        i += 1
-                    txt += '<tr><td colspan="7">&nbsp;</td></tr>'
-                    txt += '<tr><td>ALL:</td>{}</tr>'.format(tensor_info(res))
-                    txt += '</table>'
-                return ('<center>'+txt+'</center>',need_save_embed(store,gr_name,res),gr_orig)
+                    txt = table
+                    both = False
+                    for res in two:
+                        if res is None:
+                            continue
+                        if both:
+                            txt += '<strong>↑ CLIP (L) / OpenClip (G) ↓</strong>'
+                        txt += '<table class="webui_embedding_merge_table"><tr><th>Index</th><th>Min</th><th>Max</th><th>Sum</th><th>Abs</th><th>Len</th><th>Std</th>'
+                        i = 1
+                        for one in res:
+                            txt += '<tr><td>{}</td>{}</tr>'.format(i,tensor_info(one))
+                            i += 1
+                        txt += '<tr><td colspan="7">&nbsp;</td></tr>'
+                        txt += '<tr><td>ALL:</td>{}</tr>'.format(tensor_info(res))
+                        txt += '</table>'
+                        both = True
+                return ('<center>'+txt+'</center>',need_save_embed(store,gr_name,two),gr_orig)
             if gr_text.find("<'")>=0 or gr_text.find("{'")>=0:
                 cache = reset_temp_embeddings('-',False)
                 used = {}
-                (res,err) = merge_one_prompt(cache,None,{},used,gr_text,False,False)
+                (mer,err) = merge_one_prompt(cache,None,{},used,gr_text,False,False)
                 if err is not None:
                     txt = '<b style="'+font+'">Embedding Merge failed - '+html.escape(err)+'</b>'
                     return ('<center>'+txt+'</center>',gr_name,gr_orig)
-                gr_text = res
+                gr_text = mer
             by_none = 0
             by_comma = 1
             by_parts = 2
@@ -993,24 +1065,25 @@ A cat is chasing a dog. <''-'road'-'grass'>
             by_tokens = 4
             by_vectors = 5
             tok2txt = tokens_to_text()
-            clipskip = opts.CLIP_stop_at_last_layers
-            opts.CLIP_stop_at_last_layers = 1
             if gr_radio!=by_comma:
-                res = text_to_vectors(gr_text)
-                if (gr_radio==by_none) and (res is not None) and (len(res)!=0):
-                    res = [res]
+                two = text_to_vectors(gr_text)
+                if (gr_radio==by_none) and (two is not None) and (len(two[0])!=0):
+                    two = [[r] for r in two]
             else:
-                res = []
+                two = [[],[]]
                 split = gr_text.split(',')
                 for part in split:
                     one = text_to_vectors(part.strip())
                     if one:
-                        res.append(one)
+                        two[0].append(one[0])
+                        if(len(one)>1):
+                            two[1].append(one[1])
+                        else:
+                            two[1] = None
                     else:
-                        res = None
+                        two = None
                         break
-            opts.CLIP_stop_at_last_layers = clipskip
-            if (res is None) or (len(res)==0):
+            if (two is None) or (len(two[0])==0):
                 if gr_text.strip()=='':
                     return ('',gr_name,gr_orig)
                 txt = '<b>Failed to parse! (Possibly there are more than 75 tokens; or extra spaces inside embed names). Embeddings are not shown now:</b><br/><br/>'
@@ -1030,130 +1103,152 @@ A cat is chasing a dog. <''-'road'-'grass'>
                         index += length
                     txt += '</table>'
                 return ('<center>'+txt+'</center>',gr_name,gr_orig)
-            txt = table+'<tr><th>Index</th><th>Vectors</th><th>Text</th><th>Token</th><th>Min</th><th>Max</th><th>Sum</th><th>Abs</th><th>Len</th><th>Std</th></tr>'
-            index = 1
-            join = False
-            if gr_radio==by_words:
-                join = True
-                gr_radio = by_tokens
-            elif (gr_radio==by_none) or (gr_radio==by_comma):
-                r_res = []
-                for one in res:
-                    r_tensor = []
-                    r_name = ''
-                    r_tokens = []
-                    for tensor, name, tokens in one:
-                        r_tensor.append(tensor)
-                        if tok2txt and tokens and gr_radio==by_none:
+            both = []
+            for res in two:
+                if res is None:
+                    continue
+                txt = '<table class="webui_embedding_merge_table"><tr><th>Index</th><th>Vectors</th><th>Text</th><th>Token</th><th>Min</th><th>Max</th><th>Sum</th><th>Abs</th><th>Len</th><th>Std</th></tr>'
+                index = 1
+                join = False
+                if gr_radio==by_words:
+                    join = True
+                    gr_radio = by_tokens
+                elif (gr_radio==by_none) or (gr_radio==by_comma):
+                    r_res = []
+                    for one in res:
+                        r_tensor = []
+                        r_name = ''
+                        r_tokens = []
+                        for tensor, name, tokens in one:
+                            r_tensor.append(tensor)
+                            if tok2txt and tokens and gr_radio==by_none:
+                                split = tok2txt(tokens)
+                                name = ''
+                                tokens = []
+                                for s_tokens, s_name in split:
+                                    name += s_name
+                                    tokens += s_tokens
+                            r_name += name
+                            if tokens:
+                                r_tokens += tokens
+                            else:
+                                r_tokens += ['*_'+str(tensor.size(0))]
+                                if gr_radio==by_none:
+                                    r_name += ' '
+                        r_res.append((torch.cat(r_tensor),r_name,r_tokens))
+                    res = r_res
+                    gr_radio = by_parts
+                for tensor, name, tokens in res:
+                    split = None
+                    size = tensor.size(0)
+                    span = ''
+                    if gr_radio!=by_parts:
+                        span = ' rowspan="'+str(size)+'"'
+                        if tokens and tok2txt:
                             split = tok2txt(tokens)
-                            name = ''
-                            tokens = []
-                            for s_tokens, s_name in split:
-                                name += s_name
-                                tokens += s_tokens
-                        r_name += name
-                        if tokens:
-                            r_tokens += tokens
-                        else:
-                            r_tokens += ['*_'+str(tensor.size(0))]
-                            if gr_radio==by_none:
-                                r_name += ' '
-                    r_res.append((torch.cat(r_tensor),r_name,r_tokens))
-                res = r_res
-                gr_radio = by_parts
-            for tensor, name, tokens in res:
-                split = None
-                size = tensor.size(0)
-                span = ''
-                if gr_radio!=by_parts:
-                    span = ' rowspan="'+str(size)+'"'
-                    if tokens and tok2txt:
-                        split = tok2txt(tokens)
-                        if join:
-                            comb = []
-                            last = -1
-                            for s_arr, s_text in split:
-                                if (last<0) or (comb[last][1][-1:]==' '):
-                                    comb.append((s_arr,s_text))
-                                    last += 1
-                                else:
-                                    comb[last] = (comb[last][0]+s_arr,comb[last][1]+s_text)
-                            split = comb
-                    if gr_radio==by_tokens:
-                        if split is not None:
-                            span = ' rowspan="'+str(len(split))+'"'
-                        else:
-                            span = ''
-                if gr_radio==by_vectors:
-                    head = '<td'+span+'>'+str(size)+'</td>'
-                else:
-                    head = '<td'+span+'>'+(str(index) if size==1 else str(index)+'-'+str(index+size-1))+'</td><td'+span+'>'+str(size)+'</td>'
-                if split is None:
-                    head += '<td'+span+'>'+html.escape('"'+name+'"')+'</td>'
-                if (gr_radio==by_vectors) or ((gr_radio==by_tokens) and (tokens is not None)):
-                    i = 0
-                    part = 0
-                    j = 0
-                    ten = None
-                    column = ''
-                    toks = None
-                    for one in list(tensor):
-                        index += 1
-                        i += 1
-                        use = one
-                        if split is not None:
-                            if part==0:
-                                pair = split[j]
-                                part = len(pair[0])
-                                if gr_radio==by_tokens:
-                                    column = '<td>'+html.escape('"'+pair[1]+'"')+'</td>'
-                                    toks = ', '.join([str(t) for t in pair[0]])
-                                else:
-                                    column = '<td rowspan="'+str(part)+'">'+html.escape('"'+pair[1]+'"')+'</td>'
-                                j += 1
-                        part -= 1
+                            if join:
+                                comb = []
+                                last = -1
+                                for s_arr, s_text in split:
+                                    if (last<0) or (comb[last][1][-1:]==' '):
+                                        comb.append((s_arr,s_text))
+                                        last += 1
+                                    else:
+                                        comb[last] = (comb[last][0]+s_arr,comb[last][1]+s_text)
+                                split = comb
                         if gr_radio==by_tokens:
-                            if ten==None:
-                                ten = []
-                            ten.append(one)
-                            if part>0:
-                                continue
-                            use = torch.stack(ten)
-                            tok = toks if tokens else '*'
-                        else:
-                            tok = tokens[i-1] if tokens else '*_'+str(i)
-                        txt += '<tr>{}{}<td>{}</td>{}</tr>'.format(('<td>'+str(index-1)+'</td>' if gr_radio==by_vectors else '')+head,column,tok,tensor_info(use))
-                        column = ''
-                        head = ''
+                            if split is not None:
+                                span = ' rowspan="'+str(len(split))+'"'
+                            else:
+                                span = ''
+                    if gr_radio==by_vectors:
+                        head = '<td'+span+'>'+str(size)+'</td>'
+                    else:
+                        head = '<td'+span+'>'+(str(index) if size==1 else str(index)+'-'+str(index+size-1))+'</td><td'+span+'>'+str(size)+'</td>'
+                    if split is None:
+                        head += '<td'+span+'>'+html.escape('"'+name+'"')+'</td>'
+                    if (gr_radio==by_vectors) or ((gr_radio==by_tokens) and (tokens is not None)):
+                        i = 0
+                        part = 0
+                        j = 0
                         ten = None
-                else:
-                    index += size
-                    txt += '<tr>{}<td>{}</td>{}</tr>'.format(head,', '.join([str(t) for t in tokens]) if tokens else '*',tensor_info(tensor))
-            txt += '</table>'
-            return ('<center>'+txt+'</center>',need_save_embed(store,gr_name,res),gr_orig)
+                        column = ''
+                        toks = None
+                        for one in list(tensor):
+                            index += 1
+                            i += 1
+                            use = one
+                            if split is not None:
+                                if part==0:
+                                    pair = split[j]
+                                    part = len(pair[0])
+                                    if gr_radio==by_tokens:
+                                        column = '<td>'+html.escape('"'+pair[1]+'"')+'</td>'
+                                        toks = ', '.join([str(t) for t in pair[0]])
+                                    else:
+                                        column = '<td rowspan="'+str(part)+'">'+html.escape('"'+pair[1]+'"')+'</td>'
+                                    j += 1
+                            part -= 1
+                            if gr_radio==by_tokens:
+                                if ten==None:
+                                    ten = []
+                                ten.append(one)
+                                if part>0:
+                                    continue
+                                use = torch.stack(ten)
+                                tok = toks if tokens else '*'
+                            else:
+                                tok = tokens[i-1] if tokens else '*_'+str(i)
+                            txt += '<tr>{}{}<td>{}</td>{}</tr>'.format(('<td>'+str(index-1)+'</td>' if gr_radio==by_vectors else '')+head,column,tok,tensor_info(use))
+                            column = ''
+                            head = ''
+                            ten = None
+                    else:
+                        index += size   
+                        txt += '<tr>{}<td>{}</td>{}</tr>'.format(head,', '.join([str(t) for t in tokens]) if tokens else '*',tensor_info(tensor))
+                txt += '</table>'
+                both.append(txt)
+            txt = table+'<strong>↑ CLIP (L) / OpenClip (G) ↓</strong>'.join(both)
+            return ('<center>'+txt+'</center>',need_save_embed(store,gr_name,two),gr_orig)
 
     def tensor_info(tensor):
         return '<td>{:>-14.8f}</td><td>{:>+14.8f}</td><td>{:>+14.8f}</td><td>{:>14.8f}</td><td>{:>14.8f}</td><td>{:>14.8f}</td>'.format(tensor.min().item(),tensor.max().item(),tensor.sum().item(),tensor.abs().sum().item(),torch.linalg.norm(tensor,ord=2),tensor.std()).replace(' ','&nbsp;')
 
     merge_dir = None
 
-    def need_save_embed(store,name,vectors):
+    def need_save_embed(store,name,pair):
         if not store:
             return name
         name = ''.join( x for x in name if (x.isalnum() or x in '._- ')).strip()
         if name=='':
             return name
         try:
-            if type(vectors)==list:
-                vectors = torch.cat([r[0] for r in vectors])
-            file = modules.textual_inversion.textual_inversion.create_embedding('_EmbeddingMerge_temp',vectors.size(0),True,init_text='')
-            pt = torch.load(file,map_location='cpu')
-            token = list(pt['string_to_param'].keys())[0]
-            pt['string_to_param'][token] = vectors.cpu()
-            torch.save(pt,file)
+            if type(pair[0])==list:
+                vectors = [torch.cat([r[0] for r in pair[0]])]
+                if (len(pair)>1) and (pair[1] is not None):
+                    vectors.append(torch.cat([r[0] for r in pair[1]]))
+            else:
+                vectors = [pair[0]]
+                if (len(pair)>1) and (pair[1] is not None):
+                    vectors.append(pair[1])
             target = os.path.join(merge_dir,name+'.pt')
-            os.replace(file,target)
-            modules.sd_hijack.model_hijack.embedding_db.load_textual_inversion_embeddings()
+            if len(vectors)>1:
+                pt = {
+                  'clip_g': vectors[1],
+                  'clip_l': vectors[0],
+                }
+                torch.save(pt,target)
+            else:
+                file = modules.textual_inversion.textual_inversion.create_embedding('_EmbeddingMerge_temp',vectors[0].size(0),True,init_text='')
+                pt = torch.load(file,map_location='cpu')
+                token = list(pt['string_to_param'].keys())[0]
+                pt['string_to_param'][token] = vectors.cpu()
+                torch.save(pt,file)
+                os.replace(file,target)
+            try:
+                modules.sd_hijack.model_hijack.embedding_db.load_textual_inversion_embeddings(force_reload=True)
+            except:
+                modules.sd_hijack.model_hijack.embedding_db.load_textual_inversion_embeddings()
             return ''
         except:
             traceback.print_exc()
@@ -1178,8 +1273,8 @@ A cat is chasing a dog. <''-'road'-'grass'>
     em_regexp = re.compile(r"<'EM[_/-]\d+'>|{'EM[_/-]\d+'}")
 
     def merge_one_prompt(cache,texts,parts,used,prompt,prod,only_count):
-        if len(get_model_clips())>1:
-            return (None,'To enable SDXL support switch to "sdxl" branch of https://github.com/klimaleksus/stable-diffusion-webui-embedding-merge')
+        #if len(get_model_clips())>1:
+        #    return (None,'To enable SDXL support switch to "sdxl" branch of https://github.com/klimaleksus/stable-diffusion-webui-embedding-merge')
         try:
             cnt = 0
             if (prompt is None) or (prompt==''):
@@ -1228,7 +1323,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
                         else:
                             embed = add_temp_embedding(None,cache,prod,curly,res)
                     else:
-                        if (res is None) or (res.numel()==0):
+                        if (res is None) or (res[0].numel()==0):
                             embed = ''
                         else:
                             embed = add_temp_embedding(res,cache,prod,curly,0)
