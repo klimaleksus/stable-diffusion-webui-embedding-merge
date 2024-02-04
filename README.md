@@ -1,5 +1,5 @@
 **Latest update:** SDXL support! Currently in separete [sdxl](https://github.com/klimaleksus/stable-diffusion-webui-embedding-merge/tree/sdxl) branch. To enable it, either:
-- Remove the extension by deleting it's folder, then install it by URL but type `sdxl` to `Specific branch name` input box; or
+- Remove the extension by deleting its folder, then install it by URL but type `sdxl` to `Specific branch name` input box; or
 - Open the console in the extension directory and execute `git pull && git checkout sdxl`, then restart WebUI; or
 - Download the new version of [embedding_merge.py](https://github.com/klimaleksus/stable-diffusion-webui-embedding-merge/raw/sdxl/scripts/embedding_merge.py) and replace the old one in the extension `scritps` directory (`/stable-diffusion-webui/extensions/stable-diffusion-webui-embedding-merge/scripts/`)
 
