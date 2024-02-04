@@ -2,7 +2,7 @@
 
 '''
 WebUI Dependencies:
-    
+
 1) Class <modules.textual_inversion.textual_inversion.Embedding> is used to create embeddings.
      required fields: <.vec> = actual tensor, <.vectors> = first dim size, <.shape> = last dim size.
 2) Object <modules.sd_hijack.model_hijack.embedding_db> is abused to create ephemeral embeddings.
@@ -36,7 +36,7 @@ import traceback
 import threading
 import gradio
 import modules
-from modules import shared, scripts, script_callbacks, devices
+from modules import shared, scripts, script_callbacks, devices, processing
 from modules.shared import opts, cmd_opts
 from modules.textual_inversion.textual_inversion import Embedding
 from ldm.modules.encoders.modules import FrozenCLIPEmbedder, FrozenOpenCLIPEmbedder
@@ -86,7 +86,7 @@ Also use `<'your words'*0.5>` (or any number, default is 1.0) to increase or dec
 To use attention with round brackets ( ), put them around < >, like `(<'one'+'two'>:0.9)`  
 Use as many <> in one prompt, as you want; also you can put your existing TI embedding names inside `' '`.
 
-~~When you need literal <' for some reason, put a space between.~~ You cannot have literal <' anywhere in your prompts; but with a space between (`< '`) it will be ignored by this extension.  
+~~When you need literal <' for some reason, put a space between.~~ You cannot have literal <' anywhere in your prompts; but with a space between (`< '`) it will be ignored by this extension.
 
 If some other extension interferes with this syntax, change angular brackets to curly: `{'also works'*4}`
 
@@ -358,6 +358,15 @@ A cat is chasing a dog. <''-'road'-'grass'>
         res = re.sub(r'([()[\]\\])',r'\\\1',line)
         return res
 
+    def get_model_clips():
+        clip = shared.sd_model.cond_stage_model
+        if(hasattr(clip,'embedders')):
+            try:
+                return (clip.embedders[0],clip.embedders[1]) # SDXL
+            except:
+                pass
+        return (clip,) # SD1 or SD2
+
     def text_to_vectors(text):
         dv = None
         dt = None
@@ -449,7 +458,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
             return None
 
     def to_float(num):
-        if num is None: 
+        if num is None:
             return None
         try:
             return float(num)
@@ -457,7 +466,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
             return None
 
     def to_int(num):
-        if num is None: 
+        if num is None:
             return None
         try:
             return int(num)
@@ -523,7 +532,6 @@ A cat is chasing a dog. <''-'road'-'grass'>
             return (None,'Last quote not closed in '+orig)
         if len(arr)>0 and arr[-1][0]=='':
             arr.pop()
-        
         actions = []
         combine = False
         for param, quot in arr:
@@ -759,7 +767,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
             cache = {'_':0,'-':0,'/':0}
             setattr(db,field,cache)
         return cache
-        
+
     def register_embedding(name,embedding):
         self = modules.sd_hijack.model_hijack.embedding_db
         model = shared.sd_model
@@ -804,7 +812,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
         embed.cached_checksum = None
         embed.filename = ''
         register_embedding(name,embed)
-    
+
     def reset_temp_embeddings(prod,unregister):
         cache = grab_embedding_cache()
         num = cache[prod]
@@ -842,7 +850,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
             name = '<'+name+'>'
         make_temp_embedding(name,vectors,cache,fake)
         return name
-    
+
     def parse_infotext(text):
         orig = text
         text += '\n'
@@ -917,7 +925,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
             if res is None:
                 res = {}
             res[what] = repl
-    
+
     def min_or_all(a,b,n):
         if a>=0:
             if b>=0:
@@ -929,14 +937,14 @@ A cat is chasing a dog. <''-'road'-'grass'>
         elif b>=0:
             return b
         return n
-        
+
     def dict_replace(di,text):
         for key in di:
             text = text.replace(key,di[key])
         return text
 
     gr_lock = threading.Lock()
-    
+
     def gr_func(gr_name,gr_text,gr_radio,store):
         with gr_lock:
             gr_orig = gr_text
@@ -944,6 +952,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
             table = '<style>.webui_embedding_merge_table,.webui_embedding_merge_table td,.webui_embedding_merge_table th{border:1px solid gray;border-collapse:collapse}.webui_embedding_merge_table td,.webui_embedding_merge_table th{padding:2px 5px !important;text-align:center !important;vertical-align:middle;'+font+'font-weight:bold;}</style><table class="webui_embedding_merge_table">'
             (reparse,request) = parse_infotext(gr_text)
             if reparse is not None:
+                print(reparse)
                 reparse = parse_mergeseq(reparse)
                 if reparse is None:
                     return ('<center><b>Prompt restore failed!</n></center>',gr_name,gr_orig)
@@ -965,7 +974,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
                     for one in res:
                         txt += '<tr><td>{}</td>{}</tr>'.format(i,tensor_info(one))
                         i += 1
-                    txt += '<tr><td colspan="6">&nbsp;</td></tr>'
+                    txt += '<tr><td colspan="7">&nbsp;</td></tr>'
                     txt += '<tr><td>ALL:</td>{}</tr>'.format(tensor_info(res))
                     txt += '</table>'
                 return ('<center>'+txt+'</center>',need_save_embed(store,gr_name,res),gr_orig)
@@ -1118,7 +1127,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
                         head = ''
                         ten = None
                 else:
-                    index += size   
+                    index += size
                     txt += '<tr>{}<td>{}</td>{}</tr>'.format(head,', '.join([str(t) for t in tokens]) if tokens else '*',tensor_info(tensor))
             txt += '</table>'
             return ('<center>'+txt+'</center>',need_save_embed(store,gr_name,res),gr_orig)
@@ -1127,7 +1136,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
         return '<td>{:>-14.8f}</td><td>{:>+14.8f}</td><td>{:>+14.8f}</td><td>{:>14.8f}</td><td>{:>14.8f}</td><td>{:>14.8f}</td>'.format(tensor.min().item(),tensor.max().item(),tensor.sum().item(),tensor.abs().sum().item(),torch.linalg.norm(tensor,ord=2),tensor.std()).replace(' ','&nbsp;')
 
     merge_dir = None
-    
+
     def need_save_embed(store,name,vectors):
         if not store:
             return name
@@ -1167,8 +1176,10 @@ A cat is chasing a dog. <''-'road'-'grass'>
         p.__class__ = Exception_From_EmbeddingMergeExtension_
 
     em_regexp = re.compile(r"<'EM[_/-]\d+'>|{'EM[_/-]\d+'}")
-    
+
     def merge_one_prompt(cache,texts,parts,used,prompt,prod,only_count):
+        if len(get_model_clips())>1:
+            return (None,'To enable SDXL support switch to "sdxl" branch of https://github.com/klimaleksus/stable-diffusion-webui-embedding-merge')
         try:
             cnt = 0
             if (prompt is None) or (prompt==''):
@@ -1236,10 +1247,77 @@ A cat is chasing a dog. <''-'road'-'grass'>
         nonlocal fake_cached_params_counter
         fake_cached_params_counter += 1
         return (*(self.em_orig_cached_params(*ar,**kw)),id(_webui_embedding_merge_),fake_cached_params_counter)
-    
+
     cached_state = None
 
-    def embedding_merge_extension(p):
+    '''
+    import hunter
+    @hunter.wrap(local=True,actions=[hunter.VarsSnooper,hunter.CallPrinter])
+    def pretty_print(clas, indent=0, dupl=None):
+        if dupl is None:
+            dupl = {}
+        me = id(clas)
+        tab = ' ' * indent
+        if clas is None:
+            print(tab + ': None')
+            return
+        print(tab +  type(clas).__name__ +  ':')
+        indent += 4
+        tab = ' ' * indent
+        if me in dupl:
+            print(tab + '[CIRCULAR]')
+            return
+        dupl[me] = True
+        for k,v in clas.__dict__.items():
+            if '__dict__' in dir(v):
+                pretty_print(v,indent,dupl)
+            else:
+                print(tab +  k + ': ' + str(v))
+    '''
+
+    def hook_infotext(hook):
+        if hasattr(processing,'create_infotext'):
+            field = '__embedding_merge_wrapper'
+            old = getattr(processing,'create_infotext')
+            if hasattr(old,field):
+                old = getattr(old,field)
+                if not hook:
+                    setattr(processing,'create_infotext',old)
+            if hook:
+                def create_infotext(p,*ar,**kw):
+                    res = old(p,*ar,**kw)
+                    if 'EmbeddingMerge' in p.extra_generation_params:
+                        (reparse,request) = parse_infotext(res)
+                        if reparse is not None:
+                            parse = parse_mergeseq(reparse)
+                            matches = em_regexp.findall(request)
+                            if (matches is not None) and len(matches)>0:
+                                used = {}
+                                for match in matches:
+                                    used[match] = True
+                                gen = ''
+                                drop = False
+                                for embed,text in parse.items():
+                                    if embed in used:
+                                        gen += embed+'='+text+', '
+                                    else:
+                                        drop = True
+                                if gen!='' and drop:
+                                    gen = gen[:-2]
+                                    orig = p.extra_generation_params['EmbeddingMerge']
+                                    if gen!=orig:
+                                        p.extra_generation_params['EmbeddingMerge'] = gen
+                                        res = old(p,*ar,**kw)
+                                        p.extra_generation_params['EmbeddingMerge'] = orig
+                    return res
+                setattr(create_infotext,field,old)
+                setattr(processing,'create_infotext',create_infotext)
+
+    def embedding_merge_extension(p,processed):
+        if processed is not None:
+            hook_infotext(False)
+            return
+        hook_infotext(True)
         nonlocal cached_state
         use_hr = hasattr(p,'hr_prompt')
         arr = [
@@ -1359,8 +1437,9 @@ A cat is chasing a dog. <''-'road'-'grass'>
             if 'Hires negative prompt' in result:
                 result['Hires negative prompt'] = dict_replace(reparse,result['Hires negative prompt'])
     setattr(_webui_embedding_merge_,'on_infotext_pasted',on_infotext_pasted)
-    
+
     def on_script_unloaded():
+        hook_infotext(False)
         reset_temp_embeddings('_',True)
         reset_temp_embeddings('-',True)
         reset_temp_embeddings('/',True)
@@ -1391,9 +1470,10 @@ class EmbeddingMergeExtension(scripts.Script):
         return scripts.AlwaysVisible
     def process(self,p):
         if hasattr(_webui_embedding_merge_,'embedding_merge_extension'):
-            getattr(_webui_embedding_merge_,'embedding_merge_extension')(p)
-
-
+            getattr(_webui_embedding_merge_,'embedding_merge_extension')(p,None)
+    def postprocess(self,p,processed):
+        if hasattr(_webui_embedding_merge_,'embedding_merge_extension'):
+            getattr(_webui_embedding_merge_,'embedding_merge_extension')(p,processed)
 
 script_callbacks.on_ui_tabs(_webui_embedding_merge_())
 script_callbacks.on_infotext_pasted(_webui_embedding_merge_.on_infotext_pasted)
