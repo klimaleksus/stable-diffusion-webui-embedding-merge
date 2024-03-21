@@ -306,7 +306,8 @@ A cat is chasing a dog. <''-'road'-'grass'>
             if hasattr(clip,'embedders'):
                 clip = clip.embedders[0]
             clip = clip.wrapped
-            if isinstance(clip, FrozenOpenCLIPEmbedder):
+            typename = type(clip).__name__.split('.')[-1]
+            if typename=='FrozenOpenCLIPEmbedder':
                 clip = OpenClip(clip)
             else:
                 clip = VanillaClip(clip)
