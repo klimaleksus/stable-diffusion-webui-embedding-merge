@@ -1,7 +1,9 @@
-**Latest update:** SDXL support! Currently in separete [sdxl](https://github.com/klimaleksus/stable-diffusion-webui-embedding-merge/tree/sdxl) branch. To enable it, either:
-- Remove the extension by deleting its folder, then install it by URL but type `sdxl` to `Specific branch name` input box; or
-- Open the console in the extension directory and execute `git pull && git checkout sdxl`, then restart WebUI; or
-- Download the new version of [embedding_merge.py](https://github.com/klimaleksus/stable-diffusion-webui-embedding-merge/raw/sdxl/scripts/embedding_merge.py) and replace the old one in the extension `scritps` directory (`/stable-diffusion-webui/extensions/stable-diffusion-webui-embedding-merge/scripts/`)
+**Latest update:** [SDXL support branch](https://github.com/klimaleksus/stable-diffusion-webui-embedding-merge/tree/sdxl) is default now. To use it, just remove and reinstall the extension.
+
+To return to this old master branch (with no SDLX support), either:
+- Remove the extension by deleting its folder, then install it by URL but type `master` to `Specific branch name` input box; or
+- Open the console in the extension directory and execute `git pull && git checkout master`, then restart WebUI; or
+- Download the new version of [embedding_merge.py](https://github.com/klimaleksus/stable-diffusion-webui-embedding-merge/raw/master/scripts/embedding_merge.py) and replace the old one in the extension `scritps` directory (`/stable-diffusion-webui/extensions/stable-diffusion-webui-embedding-merge/scripts/`)
 
 ### Discussion: https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/7659
 
