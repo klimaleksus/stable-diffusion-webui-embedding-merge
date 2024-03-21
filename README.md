@@ -1,4 +1,6 @@
-**Latest update:** added `'text',NUM` operator for concatenation of strings and raw token index sequences!
+**Latest update:** SDXL branch made default! In case of issues, use [master](https://github.com/klimaleksus/stable-diffusion-webui-embedding-merge/tree/master) branch (read instructions how to change branches there)
+
+Now this extension should work in [WebUI Forge](https://github.com/lllyasviel/stable-diffusion-webui-forge) too!
 
 ### Discussion: https://github.com/AUTOMATIC1111/stable-diffusion-webui/discussions/7659
 
