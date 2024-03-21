@@ -1243,7 +1243,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
                 file = modules.textual_inversion.textual_inversion.create_embedding('_EmbeddingMerge_temp',vectors[0].size(0),True,init_text='')
                 pt = torch.load(file,map_location='cpu')
                 token = list(pt['string_to_param'].keys())[0]
-                pt['string_to_param'][token] = vectors.cpu()
+                pt['string_to_param'][token] = vectors[0].cpu()
                 torch.save(pt,file)
                 os.replace(file,target)
             try:
