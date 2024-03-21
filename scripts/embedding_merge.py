@@ -1533,6 +1533,9 @@ A cat is chasing a dog. <''-'road'-'grass'>
             if 'Hires negative prompt' in result:
                 result['Hires negative prompt'] = dict_replace(reparse,result['Hires negative prompt'])
     setattr(_webui_embedding_merge_,'on_infotext_pasted',on_infotext_pasted)
+    def on_model_loaded(*ar,**kw):
+        reset_temp_embeddings('/',True)
+    setattr(_webui_embedding_merge_,'on_model_loaded',on_model_loaded)
 
     def on_script_unloaded():
         hook_infotext(False)
@@ -1574,5 +1577,9 @@ class EmbeddingMergeExtension(scripts.Script):
 script_callbacks.on_ui_tabs(_webui_embedding_merge_())
 script_callbacks.on_infotext_pasted(_webui_embedding_merge_.on_infotext_pasted)
 script_callbacks.on_script_unloaded(_webui_embedding_merge_.on_script_unloaded)
+try:
+    script_callbacks.on_model_loaded(_webui_embedding_merge_.on_model_loaded)
+except:
+    pass
 
 #EOF
