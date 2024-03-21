@@ -39,7 +39,6 @@ import modules
 from modules import shared, scripts, script_callbacks, devices, processing
 from modules.shared import opts, cmd_opts
 from modules.textual_inversion.textual_inversion import Embedding
-from ldm.modules.encoders.modules import FrozenCLIPEmbedder, FrozenOpenCLIPEmbedder
 import open_clip.tokenizer
 
 def _webui_embedding_merge_():
@@ -517,13 +516,14 @@ A cat is chasing a dog. <''-'road'-'grass'>
                 vocab = []
                 for clip in clips:
                     wrapped = clip.wrapped
-                    if isinstance(wrapped, FrozenCLIPEmbedder):
+                    typename = type(wrapped).__name__.split('.')[-1]
+                    if typename=='FrozenCLIPEmbedder':
                         voc = wrapped.tokenizer.get_vocab()
-                    elif isinstance(wrapped, FrozenOpenCLIPEmbedder):
+                    elif typename=='FrozenOpenCLIPEmbedder':
                         voc = open_clip.tokenizer._tokenizer.encoder
                     else:
                         return True
-                vocab.append({v: k for k, v in voc.items()})
+                    vocab.append({v: k for k, v in voc.items()})
             t = token2[0]
             if len(vocab)>1:
                 if len(token2)>1:
@@ -1490,13 +1490,13 @@ A cat is chasing a dog. <''-'road'-'grass'>
         cls = modules.sd_hijack.StableDiffusionModelHijack
         get_prompt_lengths = cls.get_prompt_lengths
         field = '__embedding_merge_wrapper'
-        def hook_prompt_lengths(self,text):
+        def hook_prompt_lengths(self,text,*ar,**kw):
             if text.find("<'")<0 and text.find("{'")<0:
-                return get_prompt_lengths(self,text)
+                return get_prompt_lengths(self,text,*ar,**kw)
             (res,err) = merge_one_prompt(grab_embedding_cache(),None,{},None,text,True,True)
             if err is not None:
                 return -1,-1
-            return get_prompt_lengths(self,res)
+            return get_prompt_lengths(self,res,*ar,**kw)
         if hasattr(get_prompt_lengths,field):
             get_prompt_lengths = getattr(get_prompt_lengths,field)
         setattr(hook_prompt_lengths,field,get_prompt_lengths)
