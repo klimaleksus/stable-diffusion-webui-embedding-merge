@@ -39,7 +39,6 @@ import modules
 from modules import shared, scripts, script_callbacks, devices, processing
 from modules.shared import opts, cmd_opts
 from modules.textual_inversion.textual_inversion import Embedding
-from ldm.modules.encoders.modules import FrozenCLIPEmbedder, FrozenOpenCLIPEmbedder
 import open_clip.tokenizer
 
 def _webui_embedding_merge_():
@@ -304,9 +303,10 @@ A cat is chasing a dog. <''-'road'-'grass'>
                 def byte_decoder(self):
                     return self.tokenizer.byte_decoder
             clip = shared.sd_model.cond_stage_model.wrapped
-            if isinstance(clip, FrozenCLIPEmbedder):
+            typename = type(clip).__name__.split('.')[-1]
+            if typename=='FrozenCLIPEmbedder':
                 clip = VanillaClip(shared.sd_model.cond_stage_model.wrapped)
-            elif isinstance(clip, FrozenOpenCLIPEmbedder):
+            elif typename=='FrozenOpenCLIPEmbedder':
                 clip = OpenClip(shared.sd_model.cond_stage_model.wrapped)
             else:
                 return None
@@ -495,9 +495,10 @@ A cat is chasing a dog. <''-'road'-'grass'>
         def check_vocab(token):
             nonlocal vocab
             if vocab is None:
-                if isinstance(clip, FrozenCLIPEmbedder):
+                typename = type(clip).__name__.split('.')[-1]
+                if typename=='FrozenCLIPEmbedder':
                     vocab = clip.tokenizer.get_vocab()
-                elif isinstance(clip, FrozenOpenCLIPEmbedder):
+                elif typename=='FrozenOpenCLIPEmbedder':
                     vocab = open_clip.tokenizer._tokenizer.encoder
                 else:
                     return True
@@ -1395,13 +1396,13 @@ A cat is chasing a dog. <''-'road'-'grass'>
         cls = modules.sd_hijack.StableDiffusionModelHijack
         get_prompt_lengths = cls.get_prompt_lengths
         field = '__embedding_merge_wrapper'
-        def hook_prompt_lengths(self,text):
+        def hook_prompt_lengths(self,text,*ar,**kw):
             if text.find("<'")<0 and text.find("{'")<0:
-                return get_prompt_lengths(self,text)
+                return get_prompt_lengths(self,text,*ar,**kw)
             (res,err) = merge_one_prompt(grab_embedding_cache(),None,{},None,text,True,True)
             if err is not None:
                 return -1,-1
-            return get_prompt_lengths(self,res)
+            return get_prompt_lengths(self,res,*ar,**kw)
         if hasattr(get_prompt_lengths,field):
             get_prompt_lengths = getattr(get_prompt_lengths,field)
         setattr(hook_prompt_lengths,field,get_prompt_lengths)
