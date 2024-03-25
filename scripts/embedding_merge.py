@@ -1148,7 +1148,10 @@ A cat is chasing a dog. <''-'road'-'grass'>
             if type(vectors)==list:
                 vectors = torch.cat([r[0] for r in vectors])
             file = modules.textual_inversion.textual_inversion.create_embedding('_EmbeddingMerge_temp',vectors.size(0),True,init_text='')
-            pt = torch.load(file,map_location='cpu')
+            try:
+                pt = torch.load(file,map_location='cpu',weights_only=True)
+            except:
+                pt = torch.load(file,map_location='cpu')
             token = list(pt['string_to_param'].keys())[0]
             pt['string_to_param'][token] = vectors.cpu()
             torch.save(pt,file)
