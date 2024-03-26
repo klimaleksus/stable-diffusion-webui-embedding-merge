@@ -9,9 +9,8 @@ WebUI Dependencies:
      Work with fields <.word_embeddings> and <.ids_lookup> is replicated from
      </modules/textual_inversion/textual_inversion.py>, refer to <register_embedding()> here.
      UPD: not needed anymore, since upstream implemented <register_embedding_by_name()>
-3) Saving of embedding is done by calling <modules.textual_inversion.textual_inversion.create_embedding(name, num_vectors_per_token, overwrite_old, init_text='*')>
-     and then editing .pt file, plus <modules.sd_hijack.model_hijack.embedding_db.load_textual_inversion_embeddings()>
-     also <modules.sd_hijack.model_hijack.embedding_db.add_embedding_dir(path)> is used.
+3) Saving of embeddings is done by crafting a proper shape for .pt file manually, and then
+     <modules.sd_hijack.model_hijack.embedding_db.load_textual_inversion_embeddings(force_reload)> is called.
 4) <modules.sd_hijack.StableDiffusionModelHijack.get_prompt_lengths(text)> is hooked but not replaced.
 5) Part of <encode_embedding_init_text()> from <sd_hijack_clip.py> and <sd_hijack_open_clip.py> is converted to
      <tokens_to_vectors()> here; it uses <shared.sd_model.cond_stage_model.wrapped> and then calls either
@@ -1238,17 +1237,20 @@ A cat is chasing a dog. <''-'road'-'grass'>
                   'clip_g': vectors[1],
                   'clip_l': vectors[0],
                 }
-                torch.save(pt,target)
-            else:
-                file = modules.textual_inversion.textual_inversion.create_embedding('_EmbeddingMerge_temp',vectors[0].size(0),True,init_text='')
-                try:
-                    pt = torch.load(file,map_location='cpu',weights_only=True)
-                except:
-                    pt = torch.load(file,map_location='cpu')
-                token = list(pt['string_to_param'].keys())[0]
-                pt['string_to_param'][token] = vectors[0].cpu()
-                torch.save(pt,file)
-                os.replace(file,target)
+           else:
+                pt = {
+                  'string_to_token': {
+                    '*': 265,
+                  },
+                  'string_to_param': {
+                    '*': vectors[0],
+                  },
+                  'name': name,
+                  'step': 0,
+                  'sd_checkpoint': None,
+                  'sd_checkpoint_name': None,
+                }
+            torch.save(pt,target)
             try:
                 modules.sd_hijack.model_hijack.embedding_db.load_textual_inversion_embeddings(force_reload=True)
             except:
