@@ -1231,11 +1231,11 @@ A cat is chasing a dog. <''-'road'-'grass'>
                 vectors = [pair[0]]
                 if (len(pair)>1) and (pair[1] is not None):
                     vectors.append(pair[1])
-            target = os.path.join(merge_dir,name+'.pt')
+            target = os.path.join(merge_dir,name)
             if len(vectors)>1:
                 pt = {
-                  'clip_g': vectors[1],
-                  'clip_l': vectors[0],
+                  'clip_g': vectors[1].cpu(),
+                  'clip_l': vectors[0].cpu(),
                 }
             else:
                 pt = {
@@ -1243,14 +1243,26 @@ A cat is chasing a dog. <''-'road'-'grass'>
                     '*': 265,
                   },
                   'string_to_param': {
-                    '*': vectors[0],
+                    '*': vectors[0].cpu(),
                   },
                   'name': name,
                   'step': 0,
                   'sd_checkpoint': None,
                   'sd_checkpoint_name': None,
                 }
-            torch.save(pt,target)
+            torch.save(pt,target+'.pt')
+            try:
+                res = torch.load(target+'.pt',map_location='cpu')
+            except:
+                res = None
+            if res is None:
+                if len(vectors)==1:
+                    pt = {
+                      'emb_params': vectors[0].cpu(),
+                    }
+                from safetensors.torch import save_file
+                save_file(pt,target+'.safetensors')
+                os.unlink(target+'.pt')
             try:
                 modules.sd_hijack.model_hijack.embedding_db.load_textual_inversion_embeddings(force_reload=True)
             except:
