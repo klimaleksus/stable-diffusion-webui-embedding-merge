@@ -1145,21 +1145,32 @@ A cat is chasing a dog. <''-'road'-'grass'>
             return name
         try:
             if type(vectors)==list:
-                vectors = torch.cat([r[0] for r in vectors])
-            target = os.path.join(merge_dir,name+'.pt')
+                vectors = torch.cat([r[0] for r in vectors]).cpu()
+            target = os.path.join(merge_dir,name)
             pt = {
               'string_to_token': {
                 '*': 265,
               },
               'string_to_param': {
-                '*': vectors.cpu(),
+                '*': vectors,
               },
               'name': name,
               'step': 0,
               'sd_checkpoint': None,
               'sd_checkpoint_name': None,
             }
-            torch.save(pt,target)
+            torch.save(pt,target+'.pt')
+            try:
+                res = torch.load(target+'.pt',map_location='cpu')
+            except:
+                res = None
+            if res is None:
+                pt = {
+                  'emb_params': vectors,
+                }
+                from safetensors.torch import save_file
+                save_file(pt,target+'.safetensors')
+                os.unlink(target+'.pt')
             modules.sd_hijack.model_hijack.embedding_db.load_textual_inversion_embeddings()
             return ''
         except:
