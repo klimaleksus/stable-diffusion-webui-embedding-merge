@@ -35,7 +35,7 @@ import traceback
 import threading
 import gradio
 import modules
-from modules import shared, scripts, script_callbacks, devices, processing
+from modules import shared, scripts, script_callbacks, devices, processing, sd_models
 from modules.shared import opts, cmd_opts
 from modules.textual_inversion.textual_inversion import Embedding
 import open_clip.tokenizer
@@ -1015,6 +1015,10 @@ A cat is chasing a dog. <''-'road'-'grass'>
 
     def gr_func(gr_name,gr_text,gr_radio,store):
         with gr_lock:
+            try:
+                sd_models.reload_model_weights()
+            except:
+                pass
             gr_orig = gr_text
             font = 'font-family:Consolas,Courier New,Courier,monospace;'
             table = '<style>.webui_embedding_merge_table,.webui_embedding_merge_table td,.webui_embedding_merge_table th{border:1px solid gray;border-collapse:collapse}.webui_embedding_merge_table td,.webui_embedding_merge_table th{padding:2px 5px !important;text-align:center !important;vertical-align:middle;'+font+'font-weight:bold;}.webui_embedding_merge_table{margin:6px auto !important;}</style>'
