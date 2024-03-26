@@ -1237,7 +1237,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
                   'clip_g': vectors[1],
                   'clip_l': vectors[0],
                 }
-           else:
+            else:
                 pt = {
                   'string_to_token': {
                     '*': 265,
