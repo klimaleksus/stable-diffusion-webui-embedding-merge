@@ -804,6 +804,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
                                 target = [torch.zeros(s,length).to(device=devices.device,dtype=torch.float32)]
                                 target[0][0:vectors] = right[0]
                                 if len(right)>1:
+                                    (vectors,length) = right[1].size()
                                     target.append(torch.zeros(s,length).to(device=devices.device,dtype=torch.float32))
                                     target[1][0:vectors] = right[1]
                                 right = target
