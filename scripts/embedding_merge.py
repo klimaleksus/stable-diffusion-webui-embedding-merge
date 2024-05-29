@@ -279,8 +279,10 @@ A cat is chasing a dog. <''-'road'-'grass'>
                 gr_true = gradio.Checkbox(value=True,visible=False,show_label=False)
                 gr_false = gradio.Checkbox(value=False,visible=False,show_label=False)
                 gr_name = gradio.Textbox(value='', lines=1, max_lines=1, interactive=True, label='Type here a name for your new embedding that will store the result of next parsing/merging by the button above: (optional; cleared on success)')
-            gr_button.click(fn=gr_func, inputs=[gr_name,gr_text,gr_radio,gr_true], outputs=[gr_html,gr_name,gr_text], show_progress=False)
-            gr_radio.change(fn=gr_func, inputs=[gr_name,gr_text,gr_radio,gr_false], outputs=[gr_html,gr_name,gr_text], show_progress=False)
+            with gradio.Row():
+                gr_tensors = gradio.Checkbox(value=True,label="Save as .safetensors AND create sd1/sdxl converted embeddings accordingly (so you can load them as a separate L part for different architecture)")
+            gr_button.click(fn=gr_func, inputs=[gr_name,gr_text,gr_radio,gr_tensors,gr_true], outputs=[gr_html,gr_name,gr_text], show_progress=False)
+            gr_radio.change(fn=gr_func, inputs=[gr_name,gr_text,gr_radio,gr_tensors,gr_false], outputs=[gr_html,gr_name,gr_text], show_progress=False)
         return [(block,'EM','embedding_merge_extension')]
 
     def tokens_to_text():
@@ -505,8 +507,11 @@ A cat is chasing a dog. <''-'road'-'grass'>
             return None
 
     reg_clean = re.compile(r'\s+')
-    reg_oper = re.compile(r'(=?)(?:([*/,])([+-]?[0-9]*(?:\.[0-9]*)?)|:([+-]?)(-?[0-9]+))')
-
+    reg_oper = re.compile(r'(=?)(?:([*/,])([+-]?[0-9]*(?:\.[0-9]*)?(?:L|G)?)|:([+-]?)(-?[0-9]+))')
+    sdxl_sizes = {
+      'L': 768,
+      'G': 1280,
+    }
     def merge_parser(text,only_count):
         clips = get_model_clips()
         vocab = None
@@ -594,10 +599,21 @@ A cat is chasing a dog. <''-'road'-'grass'>
                 m_shift = m.group(4)
                 m_size = m.group(5)
                 m_tok = -1
+                m_clip = None
                 if m_val is not None:
+                    if len(m_val)>0:
+                        m_clip = m_val[-1]
+                        if (m_clip=='L') or (m_clip=='G'):
+                            m_val = m_val[:-1]
+                            if len(clips)<2:
+                                return (None,'Suffix L or G can be used with SDXL models only: "'+param+'" in '+orig)
+                        else:
+                            m_clip = None
                     if m_mul==',':
                         if m_flag:
                             return (None,'Concatenation doesn\'t support \'=\' prefix: "'+param+'" in '+orig)
+                        if m_clip is not None:
+                            return (None,'Concatenation doesn\'t support L or G suffix: "'+param+'" in '+orig)
                         if (len(m_val)>0) and (m_val[0]=='0'):
                             if m_val=='0':
                                 m_tok = 0
@@ -646,6 +662,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
                   'R': m_shift,
                   'F': m_flag,
                   'T': m_tok,
+                  'C': m_clip,
                   'O': one,
                 })
                 param = param[len(m.group(0)):]
@@ -809,9 +826,17 @@ A cat is chasing a dog. <''-'road'-'grass'>
                                     target[1][0:vectors] = right[1]
                                 right = target
                         elif act['W']==True:
-                            right = [r*act['V'] for r in right]
+                            if act['C']==None:
+                                right = [r*act['V'] for r in right]
+                            else:
+                                s = sdxl_sizes[act['C']]
+                                right = [(r*act['V'] if r.shape[-1]==s else r) for r in right]
                         elif  act['W']==False:
-                            right = [r/act['V'] for r in right]
+                            if act['C']==None:
+                                right = [r/act['V'] for r in right]
+                            else:
+                                s = sdxl_sizes[act['C']]
+                                right = [(r/act['V'] if r.shape[-1]==s else r) for r in right]
         return (right,None)
 
     def grab_embedding_cache():
@@ -1014,7 +1039,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
 
     gr_lock = threading.Lock()
 
-    def gr_func(gr_name,gr_text,gr_radio,store):
+    def gr_func(gr_name,gr_text,gr_radio,gr_tensors,store):
         with gr_lock:
             try:
                 sd_models.reload_model_weights()
@@ -1054,7 +1079,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
                         txt += '<tr><td>ALL:</td>{}</tr>'.format(tensor_info(res))
                         txt += '</table>'
                         both = True
-                return ('<center>'+txt+'</center>',need_save_embed(store,gr_name,two),gr_orig)
+                return ('<center>'+txt+'</center>',need_save_embed(store,gr_name,two,gr_tensors),gr_orig)
             if gr_text.find("<'")>=0 or gr_text.find("{'")>=0:
                 cache = reset_temp_embeddings('-',False)
                 used = {}
@@ -1214,14 +1239,14 @@ A cat is chasing a dog. <''-'road'-'grass'>
                 txt += '</table>'
                 both.append(txt)
             txt = table+'<strong>↑ CLIP (L) / OpenClip (G) ↓</strong>'.join(both)
-            return ('<center>'+txt+'</center>',need_save_embed(store,gr_name,two),gr_orig)
+            return ('<center>'+txt+'</center>',need_save_embed(store,gr_name,two,gr_tensors),gr_orig)
 
     def tensor_info(tensor):
         return '<td>{:>-14.8f}</td><td>{:>+14.8f}</td><td>{:>+14.8f}</td><td>{:>14.8f}</td><td>{:>14.8f}</td><td>{:>14.8f}</td>'.format(tensor.min().item(),tensor.max().item(),tensor.sum().item(),tensor.abs().sum().item(),torch.linalg.norm(tensor,ord=2),tensor.std()).replace(' ','&nbsp;')
 
     merge_dir = None
 
-    def need_save_embed(store,name,pair):
+    def need_save_embed(store,name,pair,tensors):
         if not store:
             return name
         name = ''.join( x for x in name if (x.isalnum() or x in '._- ')).strip()
@@ -1242,7 +1267,7 @@ A cat is chasing a dog. <''-'road'-'grass'>
                   'clip_g': vectors[1].cpu(),
                   'clip_l': vectors[0].cpu(),
                 }
-            else:
+            elif not tensors:
                 pt = {
                   'string_to_token': {
                     '*': 265,
@@ -1255,11 +1280,14 @@ A cat is chasing a dog. <''-'road'-'grass'>
                   'sd_checkpoint': None,
                   'sd_checkpoint_name': None,
                 }
-            torch.save(pt,target+'.pt')
-            try:
-                res = torch.load(target+'.pt',map_location='cpu')
-            except:
+            if tensors:
                 res = None
+            else:
+                torch.save(pt,target+'.pt')
+                try:
+                    res = torch.load(target+'.pt',map_location='cpu')
+                except:
+                    res = None
             if res is None:
                 if len(vectors)==1:
                     pt = {
@@ -1267,7 +1295,55 @@ A cat is chasing a dog. <''-'road'-'grass'>
                     }
                 from safetensors.torch import save_file
                 save_file(pt,target+'.safetensors')
-                os.unlink(target+'.pt')
+                try:
+                    os.unlink(target+'.pt')
+                except:
+                    pass
+            if tensors:
+                if len(vectors)>1:
+                    for vector in vectors:
+                        shape = vector.shape[-1]
+                        if vector.abs().max().item() == 0:
+                            shape = 0
+                        if shape==768:
+                            folder = os.path.join(merge_dir,'sd1')
+                        else:
+                            vector = None
+                        try:
+                            if vector is not None:
+                                os.makedirs(folder)
+                        except:
+                            pass
+                        target = os.path.join(folder,name)+'.safetensors'
+                        if vector is not None:
+                            from safetensors.torch import save_file
+                            save_file({
+                              'emb_params': vector.cpu(),
+                            },target)
+                else:
+                    folder = os.path.join(merge_dir,'sdxl')
+                    vector = vectors[0]
+                    shape = vector.shape[-1]
+                    if vector.abs().max().item() == 0:
+                        shape = 0
+                    if shape==768:
+                        s = list(vector.size())
+                        s[-1] = 1280
+                        pt = {
+                          'clip_g': torch.zeros(s).cpu(),
+                          'clip_l': vector.cpu(),
+                        }
+                    else:
+                        pt = None
+                    try:
+                        if pt is not None:
+                            os.makedirs(folder)
+                    except:
+                        pass
+                    target = os.path.join(folder,name)+'.safetensors'
+                    if pt is not None:
+                        from safetensors.torch import save_file
+                        save_file(pt,target)
             try:
                 modules.sd_hijack.model_hijack.embedding_db.load_textual_inversion_embeddings(force_reload=True)
             except:
